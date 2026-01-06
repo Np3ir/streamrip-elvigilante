@@ -52,11 +52,13 @@ class TidalClient(Client):
         self.semaphore = asyncio.Semaphore(2)
 
     def _log(self, message: str):
+        # Helper to print timestamped messages
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"[{timestamp}] {message}")
 
     async def login(self):
-        self._log("[ACTIVITY] Logging in...")
+        # We keep login logs as they happen only once
+        # self._log("[ACTIVITY] Logging in...")
         self.session = await self.get_session(verify_ssl=self.global_config.session.downloads.verify_ssl)
         c = self.config
         self.token_expiry = float(c.token_expiry) if c.token_expiry else 0
@@ -64,19 +66,21 @@ class TidalClient(Client):
 
         if self.token_expiry - time.time() < 86400:
             if self.refresh_token:
-                self._log("[ACTIVITY] Refreshing token...")
+                # self._log("[ACTIVITY] Refreshing token...")
                 await self._refresh_access_token()
         else:
             if c.access_token:
-                self._log("[ACTIVITY] Using existing token...")
+                pass
+                # self._log("[ACTIVITY] Using existing token...")
                 await self._login_by_access_token(c.access_token, c.user_id)
         self.logged_in = True
-        self._log("[ACTIVITY] Login successful.")
+        # self._log("[ACTIVITY] Login successful.")
 
     # --- FIXED STREAMING FUNCTION ---
     async def get_artist_albums_stream(self, artist_id: str):
         """Generator that yields album pages as soon as they arrive from multiple endpoints."""
-        self._log(f"[STREAM] Starting dynamic download for artist {artist_id}...")
+        # This log is useful (Green text in your console comes from main.py, this is internal)
+        # We can comment it out if you want it completely silent, but main.py handles the UI now.
 
         # Queue to receive items from producers (Albums and EPs)
         queue = asyncio.Queue()
@@ -147,7 +151,9 @@ class TidalClient(Client):
     # ----------------------------------
 
     async def get_metadata(self, item_id: str, media_type: str) -> dict:
-        self._log(f"[ACTIVITY] Fetching metadata for {media_type} ({item_id})...")
+        # SILENCED: This was causing the spam in your screenshot
+        # self._log(f"[ACTIVITY] Fetching metadata for {media_type} ({item_id})...")
+
         url = f"{media_type}s/{item_id}"
         item = await self._api_request(url, base=API_BASE)
 
@@ -159,7 +165,8 @@ class TidalClient(Client):
             item["date"] = item["dateAdded"]
 
         if media_type in ("playlist", "album"):
-            self._log(f"[ACTIVITY] Fetching tracklist for {media_type}...")
+            # SILENCED: Noisy log
+            # self._log(f"[ACTIVITY] Fetching tracklist for {media_type}...")
             endpoint = f"{url}/items"
             params = {'limit': 100}
             if media_type == "album": params['includeContributors'] = 'true'
@@ -174,7 +181,8 @@ class TidalClient(Client):
             item["tracks"] = clean_tracks
 
         elif media_type == "artist":
-            self._log(f"[ACTIVITY] Getting artist releases (Legacy Mode)...")
+            # SILENCED
+            # self._log(f"[ACTIVITY] Getting artist releases (Legacy Mode)...")
             item["albums"] = []
 
         elif media_type == "track":
@@ -312,7 +320,7 @@ class TidalClient(Client):
                         if resp.status == 429:
                             jitter = random.uniform(0.5, 3.0)
                             wait = (15 * (2 ** attempt)) + jitter
-                            self._log(f"[WAIT] Tidal 429 (Too Many Requests). Sleeping {wait:.1f}s...")
+                            # self._log(f"[WAIT] Tidal 429 (Too Many Requests). Sleeping {wait:.1f}s...")
                             await asyncio.sleep(wait)
                             continue
                         if resp.status == 404: raise NonStreamableError("TIDAL: Resource not found (404)")
