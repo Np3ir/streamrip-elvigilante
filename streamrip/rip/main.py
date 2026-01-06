@@ -159,7 +159,7 @@ class Main:
     async def rip(self):
         # --- BALANCED MODE: 2 WORKERS ---
         # Increased to 2 for better speed while maintaining stability
-        workers = [asyncio.create_task(self.worker_loop()) for _ in range(2)]
+        workers = [asyncio.create_task(self.worker_loop()) for _ in range(4)]
         
         if self.producer_tasks:
             await asyncio.gather(*self.producer_tasks)
