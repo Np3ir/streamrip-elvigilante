@@ -1,4 +1,5 @@
 import asyncio
+import sys 
 import logging
 import os
 from dataclasses import dataclass
@@ -38,15 +39,25 @@ class Album(Media):
                     return
                 await track.rip()
             except Exception as e:
-                logger.error(f"Error downloading track: {e}")
+                if sys.meta_path is not None:
+                    logger.error(f"Error downloading track: {e}")
+                else:
+                    print(f"[ERROR] Error downloading track (shutdown): {e}")
 
         results = await asyncio.gather(
-            *[_resolve_and_download(p) for p in self.tracks], return_exceptions=True
+            *[_resolve_and_download(p) for p in self.tracks],
+            return_exceptions=True
         )
 
         for result in results:
             if isinstance(result, Exception):
-                logger.error(f"Album track processing error: {result}")
+                try:
+                    if sys.meta_path is not None:
+                        logger.error(f"Album track processing error: {result}")
+                except Exception:
+                    pass
+                else:
+                    print(f"[ERROR] Album track processing error (shutdown): {result}")
 
     async def postprocess(self):
         progress.remove_title(self.meta.album)
@@ -71,7 +82,7 @@ class PendingAlbum(Pending):
         try:
             meta = AlbumMetadata.from_album_resp(resp, self.client.source)
         except Exception as e:
-            logger.error(f"Error building album metadata for {id=}: {e}")
+            logger.error(f"Error building album metadata for id={self.id}: {e}")
             return None
 
         if meta is None:

@@ -65,17 +65,21 @@ class AlbumMetadata:
 
     def format_folder_path(self, formatter: str) -> str:
         none_str = "Unknown"
+        # Date correction for folders
         release_date_clean = self.release_date.replace(":", "-").replace("/", "-")
 
-        # --- LÓGICA DE INICIALES (A-Z vs #) ---
+        # --- INITIALS LOGIC (A-Z vs #) ---
         raw_artist = self.albumartist.strip()
+        # Ignore "The " at the start
         if raw_artist.lower().startswith("the "):
             sort_name = raw_artist[4:].strip()
         else:
             sort_name = raw_artist
 
+        # Calculate initial
         if sort_name:
             initial = sort_name[0].upper()
+            # If NOT a Latin letter (A-Z, etc), goes to "#" folder
             if not re.match(r'^[A-Z\u00C0-\u00FF]$', initial):
                 initial = "#"
         else:
@@ -84,11 +88,15 @@ class AlbumMetadata:
         initials_clean = clean_filename(initial)
         # --------------------------------------
 
+        # Prepare clean variables
         artist_clean = clean_filename(self.albumartist)
         album_clean = clean_filename(self.album)
 
         info: dict[str, str | int | float] = {
+            # New variable requested in config
             "artist_initials": initials_clean,
+
+            # Standard variables
             "id": self.info.id,
             "year": self.year,
             "container": self.info.container,
@@ -98,6 +106,8 @@ class AlbumMetadata:
             "albumartist": artist_clean,
             "title": album_clean,
             "albumcomposer": clean_filename(self.albumcomposer or "") or none_str,
+
+            # Extra aliases for easier config
             "artist": artist_clean,
             "album": album_clean
         }
@@ -105,13 +115,17 @@ class AlbumMetadata:
 
     @staticmethod
     def correct_release_date(raw_date: str | None) -> tuple[str, str]:
+        """Corrects date by subtracting one day and returns (full_date, year)."""
         try:
             if raw_date:
+                # Adjustment: subtract 1 day from original date
                 dt = datetime.strptime(raw_date[:10], "%Y-%m-%d").date()
                 dt -= timedelta(days=1)
                 return str(dt), str(dt.year)
         except Exception as e:
             logger.warning(f"Invalid release_date: {raw_date} ({e})")
+
+        # Fallback if conversion fails
         year = raw_date[:4] if raw_date else "Unknown"
         return raw_date or "Unknown", year
 
@@ -166,7 +180,9 @@ class AlbumMetadata:
 
     @classmethod
     def from_tidal(cls, resp: dict) -> AlbumMetadata:
+        """Parses standard Tidal album response."""
         album = resp.get("title", "Unknown Album")
+        # Date handling with correction (-1 day)
         raw_date = resp.get("releaseDate") or resp.get("streamStartDate")
         release_date, year = cls.correct_release_date(raw_date)
 
@@ -174,16 +190,25 @@ class AlbumMetadata:
         disctotal = resp.get("numberOfVolumes", 1)
         explicit = resp.get("explicit", False)
         copyright = resp.get("copyright")
+
+        # Artist
         artist_obj = resp.get("artist", {})
         albumartist = artist_obj.get("name", "Unknown Artist")
+
+        # Quality and Container
         tidal_quality = resp.get("audioQuality", "LOW")
+        # Simple quality mapping
         quality_map = {"LOW": 0, "HIGH": 1, "LOSSLESS": 2, "HI_RES": 3}
         quality = quality_map.get(tidal_quality, 0)
+
+        # Tech estimation
         sampling_rate = 44100 if quality >= 2 else None
         bit_depth = 24 if tidal_quality == "HI_RES" else (16 if quality >= 2 else None)
         container = "FLAC" if quality >= 2 else "MP4"
+
         item_id = str(resp.get("id"))
         covers = Covers.from_tidal(resp)
+
         info = AlbumInfo(
             id=item_id,
             quality=quality,
@@ -194,6 +219,7 @@ class AlbumMetadata:
             bit_depth=bit_depth,
             booklets=None,
         )
+
         return AlbumMetadata(
             info=info,
             album=album,
@@ -232,10 +258,12 @@ class AlbumMetadata:
         label = resp.get("label")
         copyright = resp.get("copyright")
         covers = Covers.from_deezer(resp)
+        # Assume standard FLAC quality for Deezer
         quality = 2
         container = "FLAC"
         sampling_rate = 44100
         bit_depth = 16
+
         info = AlbumInfo(
             id=item_id,
             quality=quality,
@@ -246,6 +274,7 @@ class AlbumMetadata:
             bit_depth=bit_depth,
             booklets=None,
         )
+
         return AlbumMetadata(
             info=info,
             album=album,
@@ -308,6 +337,7 @@ class AlbumMetadata:
 
     @classmethod
     def from_tidal_playlist_track_resp(cls, resp: dict) -> AlbumMetadata | None:
+        """Handles single track responses containing album info."""
         album_resp = resp.get("album", {})
         if not resp.get("allowStreaming", False):
             return None

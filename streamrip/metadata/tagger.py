@@ -94,6 +94,7 @@ class Container(Enum):
 
     def _attr_from_meta(self, meta: TrackMetadata, attr: str) -> str | None:
         if attr == "albumartist":
+            # Correctly use album artist from metadata
             return meta.album.albumartist
 
         in_trackmetadata = {

@@ -6,7 +6,7 @@ from pathvalidate import sanitize_filename, sanitize_filepath
 
 
 def truncate_str(text: str) -> str:
-    # Truncado seguro por bytes
+    # Safe byte truncation
     str_bytes = text.encode()
     str_bytes = str_bytes[:255]
     return str_bytes.decode(errors="ignore")
@@ -14,17 +14,17 @@ def truncate_str(text: str) -> str:
 
 def clean_filename(fn: str, restrict: bool = False) -> str:
     """
-    Limpia un NOMBRE DE ARCHIVO individual (track).
-    Reemplaza TODOS los caracteres prohibidos (incluyendo / y \) por equivalentes visuales.
+    Cleans a TRACK FILENAME.
+    Replaces ALL forbidden characters (including / and \) with visual equivalents.
     """
-    # 1. Normalización NFC
+    # 1. NFC Normalization
     fn = unicodedata.normalize("NFC", str(fn))
 
-    # 2. Mapa completo de reemplazos (Windows Forbidden -> Full-width Unicode)
+    # 2. Full replacement map (Windows Forbidden -> Full-width Unicode)
     replacements = {
         ':': '：',
-        '/': '／',  # En un nombre de archivo, la barra también se reemplaza
-        '\\': '＼',  # La barra invertida también
+        '/': '／',
+        '\\': '＼',
         '<': '＜',
         '>': '＞',
         '"': '＂',
@@ -36,10 +36,10 @@ def clean_filename(fn: str, restrict: bool = False) -> str:
     for char, replacement in replacements.items():
         fn = fn.replace(char, replacement)
 
-    # 3. Sanitize básico (quita nulos)
+    # 3. Basic sanitize (remove nulls)
     path = truncate_str(str(sanitize_filename(fn)))
 
-    # 4. Limpieza estética
+    # 4. Aesthetic cleaning
     path = re.sub(r"\s+", " ", path).strip()
 
     return path
@@ -47,12 +47,12 @@ def clean_filename(fn: str, restrict: bool = False) -> str:
 
 def clean_filepath(fn: str, restrict: bool = False) -> str:
     """
-    Limpia una RUTA COMPLETA (carpetas).
-    Aplica los reemplazos visuales PERO respeta las barras / y \ para las carpetas.
+    Cleans a FULL PATH (folders).
+    Applies visual replacements BUT respects slashes / and \ for folder structure.
     """
     fn = unicodedata.normalize("NFC", str(fn))
 
-    # Mapa SIN las barras (porque las necesitamos para separar carpetas)
+    # Map WITHOUT slashes (needed for folder separation)
     replacements = {
         ':': '：',
         '<': '＜',
@@ -66,7 +66,7 @@ def clean_filepath(fn: str, restrict: bool = False) -> str:
     for char, replacement in replacements.items():
         fn = fn.replace(char, replacement)
 
-    # sanitize_filepath respeta los separadores de directorios
+    # sanitize_filepath respects directory separators
     path = str(sanitize_filepath(fn))
 
     path = re.sub(r"\s+", " ", path).strip()

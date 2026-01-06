@@ -48,6 +48,7 @@ class TrackMetadata:
             "explicit": "(Explicit)" if self.info.explicit else "",
         }
 
+        # Use imported clean_filename (respects accents, swaps : for ：)
         formatted_filename = clean_filename(formatter.format(**info))
 
         if not formatted_filename:
@@ -209,6 +210,8 @@ class TrackMetadata:
         tracknumber = typed(resp.get("trackNumber", 1), int)
         discnumber = typed(resp.get("volumeNumber", 1), int)
         isrc = typed(resp.get("isrc", ""), str | None)
+
+        # Fix: Handle lyrics safely (sometimes it is a string, sometimes a dict)
         lyrics_raw = resp.get("lyrics")
         if isinstance(lyrics_raw, dict):
             lyrics = lyrics_raw.get("text", "")

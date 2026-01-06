@@ -6,7 +6,7 @@ import sys
 import re
 import os
 import aiofiles
-import tomllib  # Python 3.11+ nativo
+import tomllib  # Native in Python 3.11+
 
 from .. import db
 from ..client import Client, DeezerClient, QobuzClient, SoundcloudClient, TidalClient
@@ -37,51 +37,51 @@ class Main:
     def __init__(self, config: Config):
         self.config = config
         
-        # --- FUERZA BRUTA: CARGAR CONFIG.TOML DESDE APPDATA ---
+        # --- BRUTE FORCE: LOAD CONFIG.TOML FROM APPDATA ---
         try:
             appdata = os.environ.get("APPDATA")
             manual_config_path = os.path.join(appdata, "streamrip", "config.toml")
             
-            # Valores por defecto por si falla la lectura
+            # Default values in case reading fails
             target_folder = config.session.downloads.folder
             db_path = os.path.join(target_folder, "downloads.db")
             failed_db_path = os.path.join(target_folder, "failed_downloads.db")
 
             if os.path.exists(manual_config_path):
-                console.print(f"[green]Leyendo configuración de: {manual_config_path}[/green]")
+                console.print(f"[green]Reading configuration from: {manual_config_path}[/green]")
                 with open(manual_config_path, "rb") as f:
                     data = tomllib.load(f)
                 
-                # 1. Forzar Carpeta de Descarga
+                # 1. Force Download Folder
                 if "downloads" in data and "folder" in data["downloads"]:
                     target_folder = data["downloads"]["folder"]
                     self.config.session.downloads.folder = target_folder
-                    console.print(f"[cyan]>> Carpeta de descarga forzada a: {target_folder}[/cyan]")
+                    console.print(f"[cyan]>> Download folder forced to: {target_folder}[/cyan]")
 
-                # 2. Forzar Formato de Carpetas
+                # 2. Force Folder Format
                 if "filepaths" in data:
                     if "folder_format" in data["filepaths"]:
                         self.config.session.filepaths.folder_format = data["filepaths"]["folder_format"]
                     if "track_format" in data["filepaths"]:
                         self.config.session.filepaths.track_format = data["filepaths"]["track_format"]
 
-                # 3. Leer Rutas de Base de Datos
+                # 3. Read Database Paths
                 if "database" in data:
                     if "downloads_path" in data["database"]:
                         db_path = data["database"]["downloads_path"]
                     if "failed_downloads_path" in data["database"]:
                         failed_db_path = data["database"]["failed_downloads_path"]
             else:
-                console.print(f"[red]No se encontró config.toml en: {manual_config_path}[/red]")
+                console.print(f"[red]Config.toml not found at: {manual_config_path}[/red]")
                 os.makedirs(target_folder, exist_ok=True)
 
         except Exception as e:
-            console.print(f"[red]Error al leer config.toml manual: {e}[/red]")
+            console.print(f"[red]Error reading manual config.toml: {e}[/red]")
             target_folder = config.session.downloads.folder
             db_path = os.path.join(target_folder, "downloads.db")
             failed_db_path = os.path.join(target_folder, "failed_downloads.db")
 
-        # Inicializar Clientes
+        # Initialize Clients
         self.clients: dict[str, Client] = {
             "qobuz": QobuzClient(config),
             "tidal": TidalClient(config),
@@ -89,7 +89,8 @@ class Main:
             "soundcloud": SoundcloudClient(config),
         }
 
-        # Inicializar Base de Datos con las rutas correctas
+        # Initialize Database with correct paths
+        # Ensure DB folders exist
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         os.makedirs(os.path.dirname(failed_db_path), exist_ok=True)
 
@@ -102,7 +103,7 @@ class Main:
         self.producer_tasks = [] 
 
     async def add(self, url: str):
-        # Streaming background para artistas de Tidal
+        # Background streaming for Tidal artists
         tidal_artist_match = re.search(r'tidal\.com.*/artist/(\d+)', url)
         
         if tidal_artist_match:
@@ -120,7 +121,7 @@ class Main:
     async def _background_search_artist(self, artist_id):
         try:
             client = await self.get_logged_in_client("tidal")
-            console.print(f"[green]Streaming iniciado: Buscando lanzamientos para {artist_id}...[/green]")
+            console.print(f"[green]Streaming started: Searching releases for {artist_id}...[/green]")
             async for album_batch in client.get_artist_albums_stream(artist_id):
                 count = 0
                 for album in album_batch:
@@ -128,9 +129,9 @@ class Main:
                         item = PendingAlbum(str(album['id']), client, self.config, self.database)
                         await self.queue.put(item)
                         count += 1
-                console.print(f"[dim]>> Cola alimentada: +{count} álbumes[/dim]")
+                console.print(f"[dim]>> Queue fed: +{count} albums[/dim]")
         except Exception as e:
-            logger.error(f"Error en búsqueda background: {e}")
+            logger.error(f"Error in background search: {e}")
 
     async def add_by_id(self, source: str, media_type: str, id: str):
         client = await self.get_logged_in_client(source)

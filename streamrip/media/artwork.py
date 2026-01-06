@@ -22,6 +22,10 @@ def remove_artwork_tempdirs():
             shutil.rmtree(path)
         except FileNotFoundError:
             pass
+        except PermissionError as e:
+            logger.warning(f"PermissionError removing {path}: {e}")
+        except Exception as e:
+            logger.warning(f"Error removing artwork tempdir {path}: {e}")
 
 
 async def download_artwork(

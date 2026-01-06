@@ -1,3 +1,4 @@
+import inspect
 import asyncio
 import logging
 import re
@@ -61,15 +62,18 @@ class Artist(Media):
             await asyncio.gather(*batch)
 
     async def _download_async(self, filters: QobuzDiscographyFilterConfig):
+        # Verificación defensiva para asegurar que esta función no se use sin await
+        if not inspect.iscoroutinefunction(self._download_async):
+            logger.warning("⚠️ _download_async se está llamando sin await")
+
         async def _rip(item: PendingAlbum):
             album = await item.resolve()
-            # Skip if album doesn't pass the filter
             if (
-                album is None
-                or (filters.extras and not self._extras(album))
-                or (filters.features and not self._features(album))
-                or (filters.non_studio_albums and not self._non_studio_albums(album))
-                or (filters.non_remaster and not self._non_remaster(album))
+                    album is None
+                    or (filters.extras and not self._extras(album))
+                    or (filters.features and not self._features(album))
+                    or (filters.non_studio_albums and not self._non_studio_albums(album))
+                    or (filters.non_remaster and not self._non_remaster(album))
             ):
                 return
             await album.rip()

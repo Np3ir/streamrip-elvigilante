@@ -3,9 +3,15 @@ from abc import ABC, abstractmethod
 
 class Media(ABC):
     async def rip(self):
-        await self.preprocess()
-        await self.download()
-        await self.postprocess()
+        try:
+            await self.preprocess()
+            await self.download()
+            await self.postprocess()
+        except Exception as e:
+            import logging
+            logging.getLogger("streamrip").error(f"Error during rip(): {e}")
+            raise
+
 
     @abstractmethod
     async def preprocess(self):
