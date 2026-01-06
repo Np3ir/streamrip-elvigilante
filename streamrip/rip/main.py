@@ -157,9 +157,9 @@ class Main:
         pass 
 
     async def rip(self):
-        # --- TANK MODE: 1 WORKER ---
-        # Single thread download for maximum stability
-        workers = [asyncio.create_task(self.worker_loop()) for _ in range(1)]
+        # --- BALANCED MODE: 2 WORKERS ---
+        # Increased to 2 for better speed while maintaining stability
+        workers = [asyncio.create_task(self.worker_loop()) for _ in range(2)]
         
         if self.producer_tasks:
             await asyncio.gather(*self.producer_tasks)
