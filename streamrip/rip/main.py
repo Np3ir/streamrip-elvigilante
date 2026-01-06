@@ -56,7 +56,6 @@ class Main:
                 if "downloads" in data and "folder" in data["downloads"]:
                     target_folder = data["downloads"]["folder"]
                     self.config.session.downloads.folder = target_folder
-                    console.print(f"[cyan]>> Download folder forced to: {target_folder}[/cyan]")
 
                 # 2. Force Folder Format
                 if "filepaths" in data:
