@@ -9,7 +9,6 @@ from datetime import datetime
 from json import JSONDecodeError
 
 import aiohttp
-# Importamos ClientTimeout para controlar los cortes
 from aiohttp import TCPConnector, CookieJar, ClientSession, ClientTimeout
 
 from ..config import Config
@@ -39,8 +38,8 @@ QUALITY_MAP = {
 
 class TidalClient(Client):
     """
-    TidalClient 'Tank Mode'.
-    High timeouts and conservative connection handling.
+    TidalClient 'Auto-Refresh'.
+    Automatically refreshes token on 401 errors.
     """
 
     source = "tidal"
@@ -51,7 +50,6 @@ class TidalClient(Client):
         self.global_config = config
         self.config = config.session.tidal
         self.rate_limiter = self.get_rate_limiter(30)
-        # Limit internal semaphore to 1 just in case
         self.semaphore = asyncio.Semaphore(1)
 
     def _log(self, message: str):
@@ -59,13 +57,9 @@ class TidalClient(Client):
         print(f"[{timestamp}] {message}")
 
     async def login(self):
-        # --- FIX: TANK MODE SESSION ---
         jar = CookieJar(unsafe=True)
-        # force_close=True avoids reusing dead sockets
-        # limit=1 limits simultaneous connections
+        # Tank Mode connection settings
         connector = TCPConnector(limit=1, force_close=True, enable_cleanup_closed=True)
-
-        # Timeout: 30 seconds to connect, 1 hour (3600s) for download duration
         timeout = ClientTimeout(total=3600, connect=30, sock_read=60)
 
         self.session = ClientSession(
@@ -91,7 +85,6 @@ class TidalClient(Client):
                 await self._login_by_access_token(c.access_token, c.user_id)
         self.logged_in = True
 
-    # --- FIXED STREAMING FUNCTION ---
     async def get_artist_albums_stream(self, artist_id: str):
         queue = asyncio.Queue()
         sentinel = object()
@@ -151,8 +144,6 @@ class TidalClient(Client):
                         yield page_resp["items"]
                 except Exception as e:
                     logger.error(f"Error fetching offset page: {e}")
-
-    # ----------------------------------
 
     async def get_metadata(self, item_id: str, media_type: str) -> dict:
         url = f"{media_type}s/{item_id}"
@@ -285,14 +276,19 @@ class TidalClient(Client):
                    "token_expiry": resp["expires_in"] + time.time()}
 
     async def _refresh_access_token(self):
+        logger.info("Refreshing Tidal access token...")
         data = {"client_id": CLIENT_ID, "refresh_token": self.refresh_token, "grant_type": "refresh_token",
                 "scope": "r_usr+w_usr+w_sub"}
         resp = await self._api_post(f"{AUTH_URL}/token", data, AUTH)
-        if resp.get("status", 200) != 200: raise Exception("Refresh failed")
-        c = self.config;
-        c.access_token = resp["access_token"];
+        if resp.get("status", 200) != 200:
+            raise Exception("Refresh failed")
+
+        # Update config and session headers
+        c = self.config
+        c.access_token = resp["access_token"]
         c.token_expiry = resp["expires_in"] + time.time()
         self._update_authorization_from_config()
+        logger.info("Tidal token refreshed successfully.")
 
     async def _get_device_code(self):
         if not hasattr(self, "session"): self.session = await self.get_session()
@@ -309,6 +305,7 @@ class TidalClient(Client):
         if params is None: params = {}
         if "countryCode" not in params: params["countryCode"] = self.config.country_code
         if "limit" not in params: params["limit"] = 100
+
         for attempt in range(retries + 1):
             async with self.semaphore:
                 async with self.rate_limiter:
@@ -316,19 +313,42 @@ class TidalClient(Client):
 
                     try:
                         async with self.session.get(url, params=params) as resp:
+                            # 1. Handle Rate Limits
                             if resp.status == 429:
                                 jitter = random.uniform(0.5, 3.0)
                                 wait = (15 * (2 ** attempt)) + jitter
                                 await asyncio.sleep(wait)
                                 continue
-                            if resp.status == 404: raise NonStreamableError("TIDAL: Resource not found (404)")
+
+                            # 2. Handle 401 UNAUTHORIZED (Expired Token)
+                            if resp.status == 401:
+                                if attempt < 2:  # Prevent infinite loops
+                                    await asyncio.sleep(1)
+                                    await self._refresh_access_token()
+                                    continue  # Retry the same request with new token
+                                else:
+                                    raise Exception("Tidal returned 401 (Unauthorized) repeatedly.")
+
+                            # 3. Handle 404
+                            if resp.status == 404:
+                                raise NonStreamableError("TIDAL: Resource not found (404)")
+
+                            # 4. Standard check
                             resp.raise_for_status()
+
                             try:
                                 return await resp.json()
                             except:
                                 return json.loads(await resp.text())
+
                     except aiohttp.ClientOSError:
                         await asyncio.sleep(1)
                         continue
+                    except Exception as e:
+                        if "401" in str(e) and attempt < 2:
+                            await self._refresh_access_token()
+                            continue
+                        if attempt == retries:
+                            raise e
 
         raise Exception(f"Connection failed after {retries} retries.")
