@@ -48,7 +48,6 @@ class Main:
             failed_db_path = os.path.join(target_folder, "failed_downloads.db")
 
             if os.path.exists(manual_config_path):
-                console.print(f"[green]Reading configuration from: {manual_config_path}[/green]")
                 with open(manual_config_path, "rb") as f:
                     data = tomllib.load(f)
                 
