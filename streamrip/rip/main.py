@@ -118,18 +118,15 @@ class Main:
         try:
             client = await self.get_logged_in_client("tidal")
 
-            # --- NEW: Fetch Artist Name for better UI ---
             display_name = artist_id
             try:
-                # Fetch metadata just to get the name
                 artist_meta = await client.get_metadata(artist_id, "artist")
                 if "name" in artist_meta:
                     display_name = artist_meta["name"]
             except:
-                pass  # Use ID if name fetch fails
-            # ---------------------------------------------
+                pass
 
-            console.print(f"\n[green]Streaming started: Searching releases for {display_name}...[/green]")
+            console.print(f"[green]Streaming started: Searching releases for {display_name}...[/green]")
 
             async for album_batch in client.get_artist_albums_stream(artist_id):
                 count = 0
@@ -169,7 +166,10 @@ class Main:
         pass
 
     async def rip(self):
-        workers = [asyncio.create_task(self.worker_loop()) for _ in range(4)]
+        # --- STABILITY FIX: REDUCED WORKERS ---
+        # Changed from 4 to 2 to prevent connection drops/timeouts
+        workers = [asyncio.create_task(self.worker_loop()) for _ in range(2)]
+
         if self.producer_tasks:
             await asyncio.gather(*self.producer_tasks)
         await self.queue.join()

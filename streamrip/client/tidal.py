@@ -9,6 +9,8 @@ from datetime import datetime
 from json import JSONDecodeError
 
 import aiohttp
+# Importamos TCPConnector y CookieJar explícitamente
+from aiohttp import TCPConnector, CookieJar, ClientSession
 
 from ..config import Config
 from ..exceptions import NonStreamableError
@@ -37,8 +39,8 @@ QUALITY_MAP = {
 
 class TidalClient(Client):
     """
-    TidalClient 'Streaming Fixed'.
-    True parallel streaming implementation using asyncio.Queue.
+    TidalClient 'Stability Fix'.
+    Uses force_close to prevent 'Cannot write to closing transport' errors.
     """
 
     source = "tidal"
@@ -52,46 +54,51 @@ class TidalClient(Client):
         self.semaphore = asyncio.Semaphore(2)
 
     def _log(self, message: str):
-        # Helper to print timestamped messages
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"[{timestamp}] {message}")
 
     async def login(self):
-        # We keep login logs as they happen only once
-        # self._log("[ACTIVITY] Logging in...")
-        self.session = await self.get_session(verify_ssl=self.global_config.session.downloads.verify_ssl)
+        # --- FIX: ROBUST SESSION CREATION ---
+        # We create a specific connector that forces closing connections after use.
+        # This prevents the 'Cannot write to closing transport' error when Tidal
+        # drops the connection on their end.
+        jar = CookieJar(unsafe=True)
+        connector = TCPConnector(limit=10, force_close=True)
+
+        # Manually create the session instead of using parent helper
+        self.session = ClientSession(
+            connector=connector,
+            cookie_jar=jar,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        )
+
+        # Verify SSL option from config
+        if not self.global_config.session.downloads.verify_ssl:
+            self.session.connector._ssl = False
+
         c = self.config
         self.token_expiry = float(c.token_expiry) if c.token_expiry else 0
         self.refresh_token = c.refresh_token
 
         if self.token_expiry - time.time() < 86400:
             if self.refresh_token:
-                # self._log("[ACTIVITY] Refreshing token...")
                 await self._refresh_access_token()
         else:
             if c.access_token:
-                pass
-                # self._log("[ACTIVITY] Using existing token...")
                 await self._login_by_access_token(c.access_token, c.user_id)
         self.logged_in = True
-        # self._log("[ACTIVITY] Login successful.")
 
     # --- FIXED STREAMING FUNCTION ---
     async def get_artist_albums_stream(self, artist_id: str):
-        """Generator that yields album pages as soon as they arrive from multiple endpoints."""
-        # This log is useful (Green text in your console comes from main.py, this is internal)
-        # We can comment it out if you want it completely silent, but main.py handles the UI now.
-
-        # Queue to receive items from producers (Albums and EPs)
         queue = asyncio.Queue()
-        sentinel = object()  # Marker to signal when a producer is done
+        sentinel = object()
 
         endpoints = [
             (f"artists/{artist_id}/albums", {'limit': 100}),
             (f"artists/{artist_id}/albums", {"filter": "EPSANDSINGLES", 'limit': 100})
         ]
 
-        # Producer
         async def producer(ep, params):
             try:
                 async for batch in self._fetch_pages_generator(ep, params):
@@ -101,11 +108,9 @@ class TidalClient(Client):
             finally:
                 await queue.put(sentinel)
 
-        # Launch producers
         for ep, params in endpoints:
             asyncio.create_task(producer(ep, params))
 
-        # Consumer
         active_producers = len(endpoints)
         while active_producers > 0:
             item = await queue.get()
@@ -115,8 +120,6 @@ class TidalClient(Client):
                 yield item
 
     async def _fetch_pages_generator(self, endpoint: str, base_params: dict):
-        """Helper async generator that yields paginated item lists."""
-        # 1. Page 0
         p = base_params.copy()
         p['offset'] = 0
         try:
@@ -132,7 +135,6 @@ class TidalClient(Client):
         if total <= 100:
             return
 
-        # 2. Remaining pages (Parallel Fetching)
         page_tasks = []
         for offset in range(100, total, 100):
             p = base_params.copy()
@@ -151,9 +153,6 @@ class TidalClient(Client):
     # ----------------------------------
 
     async def get_metadata(self, item_id: str, media_type: str) -> dict:
-        # SILENCED: This was causing the spam in your screenshot
-        # self._log(f"[ACTIVITY] Fetching metadata for {media_type} ({item_id})...")
-
         url = f"{media_type}s/{item_id}"
         item = await self._api_request(url, base=API_BASE)
 
@@ -165,8 +164,6 @@ class TidalClient(Client):
             item["date"] = item["dateAdded"]
 
         if media_type in ("playlist", "album"):
-            # SILENCED: Noisy log
-            # self._log(f"[ACTIVITY] Fetching tracklist for {media_type}...")
             endpoint = f"{url}/items"
             params = {'limit': 100}
             if media_type == "album": params['includeContributors'] = 'true'
@@ -181,8 +178,6 @@ class TidalClient(Client):
             item["tracks"] = clean_tracks
 
         elif media_type == "artist":
-            # SILENCED
-            # self._log(f"[ACTIVITY] Getting artist releases (Legacy Mode)...")
             item["albums"] = []
 
         elif media_type == "track":
@@ -316,17 +311,23 @@ class TidalClient(Client):
             async with self.semaphore:
                 async with self.rate_limiter:
                     url = path if path.startswith("http") else f"{base}/{path}"
-                    async with self.session.get(url, params=params) as resp:
-                        if resp.status == 429:
-                            jitter = random.uniform(0.5, 3.0)
-                            wait = (15 * (2 ** attempt)) + jitter
-                            # self._log(f"[WAIT] Tidal 429 (Too Many Requests). Sleeping {wait:.1f}s...")
-                            await asyncio.sleep(wait)
-                            continue
-                        if resp.status == 404: raise NonStreamableError("TIDAL: Resource not found (404)")
-                        resp.raise_for_status()
-                        try:
-                            return await resp.json()
-                        except:
-                            return json.loads(await resp.text())
+
+                    try:
+                        async with self.session.get(url, params=params) as resp:
+                            if resp.status == 429:
+                                jitter = random.uniform(0.5, 3.0)
+                                wait = (15 * (2 ** attempt)) + jitter
+                                await asyncio.sleep(wait)
+                                continue
+                            if resp.status == 404: raise NonStreamableError("TIDAL: Resource not found (404)")
+                            resp.raise_for_status()
+                            try:
+                                return await resp.json()
+                            except:
+                                return json.loads(await resp.text())
+                    except aiohttp.ClientOSError:
+                        # Si la conexión se cierra, esperamos un segundo y reintentamos
+                        await asyncio.sleep(1)
+                        continue
+
         raise Exception(f"Connection failed after {retries} retries.")
