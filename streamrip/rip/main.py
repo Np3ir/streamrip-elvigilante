@@ -129,7 +129,7 @@ class Main:
                 pass  # Use ID if name fetch fails
             # ---------------------------------------------
 
-            console.print(f"[green] Streaming started: Searching releases for {display_name}...[/green]")
+            console.print(f"\n[green]Streaming started: Searching releases for {display_name}...[/green]")
 
             async for album_batch in client.get_artist_albums_stream(artist_id):
                 count = 0
