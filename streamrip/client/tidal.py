@@ -9,8 +9,8 @@ from datetime import datetime
 from json import JSONDecodeError
 
 import aiohttp
-# Importamos TCPConnector y CookieJar explícitamente
-from aiohttp import TCPConnector, CookieJar, ClientSession
+# Importamos ClientTimeout para controlar los cortes
+from aiohttp import TCPConnector, CookieJar, ClientSession, ClientTimeout
 
 from ..config import Config
 from ..exceptions import NonStreamableError
@@ -39,8 +39,8 @@ QUALITY_MAP = {
 
 class TidalClient(Client):
     """
-    TidalClient 'Stability Fix'.
-    Uses force_close to prevent 'Cannot write to closing transport' errors.
+    TidalClient 'Tank Mode'.
+    High timeouts and conservative connection handling.
     """
 
     source = "tidal"
@@ -51,29 +51,31 @@ class TidalClient(Client):
         self.global_config = config
         self.config = config.session.tidal
         self.rate_limiter = self.get_rate_limiter(30)
-        self.semaphore = asyncio.Semaphore(2)
+        # Limit internal semaphore to 1 just in case
+        self.semaphore = asyncio.Semaphore(1)
 
     def _log(self, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"[{timestamp}] {message}")
 
     async def login(self):
-        # --- FIX: ROBUST SESSION CREATION ---
-        # We create a specific connector that forces closing connections after use.
-        # This prevents the 'Cannot write to closing transport' error when Tidal
-        # drops the connection on their end.
+        # --- FIX: TANK MODE SESSION ---
         jar = CookieJar(unsafe=True)
-        connector = TCPConnector(limit=10, force_close=True)
+        # force_close=True avoids reusing dead sockets
+        # limit=1 limits simultaneous connections
+        connector = TCPConnector(limit=1, force_close=True, enable_cleanup_closed=True)
 
-        # Manually create the session instead of using parent helper
+        # Timeout: 30 seconds to connect, 1 hour (3600s) for download duration
+        timeout = ClientTimeout(total=3600, connect=30, sock_read=60)
+
         self.session = ClientSession(
             connector=connector,
             cookie_jar=jar,
+            timeout=timeout,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
         )
 
-        # Verify SSL option from config
         if not self.global_config.session.downloads.verify_ssl:
             self.session.connector._ssl = False
 
@@ -326,7 +328,6 @@ class TidalClient(Client):
                             except:
                                 return json.loads(await resp.text())
                     except aiohttp.ClientOSError:
-                        # Si la conexión se cierra, esperamos un segundo y reintentamos
                         await asyncio.sleep(1)
                         continue
 

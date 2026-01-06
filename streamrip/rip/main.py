@@ -33,16 +33,15 @@ logger = logging.getLogger("streamrip")
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-
 class Main:
     def __init__(self, config: Config):
         self.config = config
-
+        
         # --- BRUTE FORCE: LOAD CONFIG.TOML FROM APPDATA ---
         try:
             appdata = os.environ.get("APPDATA")
             manual_config_path = os.path.join(appdata, "streamrip", "config.toml")
-
+            
             # Default values in case reading fails
             target_folder = config.session.downloads.folder
             db_path = os.path.join(target_folder, "downloads.db")
@@ -51,7 +50,7 @@ class Main:
             if os.path.exists(manual_config_path):
                 with open(manual_config_path, "rb") as f:
                     data = tomllib.load(f)
-
+                
                 # 1. Force Download Folder
                 if "downloads" in data and "folder" in data["downloads"]:
                     target_folder = data["downloads"]["folder"]
@@ -94,19 +93,19 @@ class Main:
         failed_downloads_db = db.Failed(failed_db_path)
         self.database = db.Database(downloads_db, failed_downloads_db)
         # -----------------------------------------------------------
-
+        
         self.queue = asyncio.Queue()
-        self.producer_tasks = []
+        self.producer_tasks = [] 
 
     async def add(self, url: str):
         # Background streaming for Tidal artists
         tidal_artist_match = re.search(r'tidal\.com.*/artist/(\d+)', url)
-
+        
         if tidal_artist_match:
             artist_id = tidal_artist_match.group(1)
             task = asyncio.create_task(self._background_search_artist(artist_id))
             self.producer_tasks.append(task)
-            return
+            return 
 
         parsed = parse_url(url)
         if parsed is None: raise Exception(f"Unable to parse url {url}")
@@ -117,7 +116,7 @@ class Main:
     async def _background_search_artist(self, artist_id):
         try:
             client = await self.get_logged_in_client("tidal")
-
+            
             display_name = artist_id
             try:
                 artist_meta = await client.get_metadata(artist_id, "artist")
@@ -127,7 +126,7 @@ class Main:
                 pass
 
             console.print(f"[green]Streaming started: Searching releases for {display_name}...[/green]")
-
+            
             async for album_batch in client.get_artist_albums_stream(artist_id):
                 count = 0
                 for album in album_batch:
@@ -141,35 +140,27 @@ class Main:
 
     async def add_by_id(self, source: str, media_type: str, id: str):
         client = await self.get_logged_in_client(source)
-        if media_type == "track":
-            item = PendingSingle(id, client, self.config, self.database)
-        elif media_type == "album":
-            item = PendingAlbum(id, client, self.config, self.database)
-        elif media_type == "playlist":
-            item = PendingPlaylist(id, client, self.config, self.database)
-        elif media_type == "label":
-            item = PendingLabel(id, client, self.config, self.database)
-        elif media_type == "artist":
-            item = PendingArtist(id, client, self.config, self.database)
-        else:
-            raise Exception(media_type)
+        if media_type == "track": item = PendingSingle(id, client, self.config, self.database)
+        elif media_type == "album": item = PendingAlbum(id, client, self.config, self.database)
+        elif media_type == "playlist": item = PendingPlaylist(id, client, self.config, self.database)
+        elif media_type == "label": item = PendingLabel(id, client, self.config, self.database)
+        elif media_type == "artist": item = PendingArtist(id, client, self.config, self.database)
+        else: raise Exception(media_type)
         await self.queue.put(item)
 
     async def add_all(self, urls: list[str]):
         for url in urls:
-            try:
-                await self.add(url)
-            except Exception as e:
-                console.print(f"[red]Error adding {url}: {e}[/red]")
+            try: await self.add(url)
+            except Exception as e: console.print(f"[red]Error adding {url}: {e}[/red]")
 
     async def resolve(self):
-        pass
+        pass 
 
     async def rip(self):
-        # --- STABILITY FIX: REDUCED WORKERS ---
-        # Changed from 4 to 2 to prevent connection drops/timeouts
-        workers = [asyncio.create_task(self.worker_loop()) for _ in range(2)]
-
+        # --- TANK MODE: 1 WORKER ---
+        # Single thread download for maximum stability
+        workers = [asyncio.create_task(self.worker_loop()) for _ in range(1)]
+        
         if self.producer_tasks:
             await asyncio.gather(*self.producer_tasks)
         await self.queue.join()
@@ -199,9 +190,7 @@ class Main:
                 await client.login()
         return client
 
-    async def __aenter__(self):
-        return self
-
+    async def __aenter__(self): return self
     async def __aexit__(self, *_):
         for client in self.clients.values():
             if hasattr(client, "session"): await client.session.close()
@@ -214,7 +203,6 @@ class Main:
             pass
         remove_artwork_tempdirs()
 
-
 def run_main():
     async def main():
         config = Config()
@@ -225,14 +213,9 @@ def run_main():
                 await ripper.rip()
             else:
                 print("No URLs provided.")
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        logger.exception("Error:", exc_info=e)
-
+    try: asyncio.run(main())
+    except KeyboardInterrupt: pass
+    except Exception as e: logger.exception("Error:", exc_info=e)
 
 if __name__ == "__main__":
     run_main()
