@@ -8,6 +8,13 @@ import os
 import aiofiles
 import tomllib  # Native in Python 3.11+
 
+# --- NEW IMPORTS FOR DASHBOARD ---
+from rich.live import Live
+from rich.table import Table
+from rich.panel import Panel
+from rich import box
+# ---------------------------------
+
 from .. import db
 from ..client import Client, DeezerClient, QobuzClient, SoundcloudClient, TidalClient
 from ..config import Config
@@ -33,15 +40,16 @@ logger = logging.getLogger("streamrip")
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+
 class Main:
     def __init__(self, config: Config):
         self.config = config
-        
+
         # --- BRUTE FORCE: LOAD CONFIG.TOML FROM APPDATA ---
         try:
             appdata = os.environ.get("APPDATA")
             manual_config_path = os.path.join(appdata, "streamrip", "config.toml")
-            
+
             # Default values in case reading fails
             target_folder = config.session.downloads.folder
             db_path = os.path.join(target_folder, "downloads.db")
@@ -50,7 +58,7 @@ class Main:
             if os.path.exists(manual_config_path):
                 with open(manual_config_path, "rb") as f:
                     data = tomllib.load(f)
-                
+
                 # 1. Force Download Folder
                 if "downloads" in data and "folder" in data["downloads"]:
                     target_folder = data["downloads"]["folder"]
@@ -92,20 +100,52 @@ class Main:
         downloads_db = db.Downloads(db_path)
         failed_downloads_db = db.Failed(failed_db_path)
         self.database = db.Database(downloads_db, failed_downloads_db)
-        # -----------------------------------------------------------
-        
+
+        # --- DASHBOARD & WORKER CONFIG ---
         self.queue = asyncio.Queue()
-        self.producer_tasks = [] 
+        self.producer_tasks = []
+        self.worker_status = {}  # Stores status for visual table
+        self.total_workers = 4  # Set number of parallel downloads here
+
+    # --- DASHBOARD GENERATOR ---
+    def generate_dashboard(self) -> Table:
+        """Creates the Rich table for the live dashboard."""
+        table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
+        table.add_column("Worker", style="dim", width=8)
+        table.add_column("Status", width=12)
+        table.add_column("Current Item / Detail", style="white")
+
+        # Loop through defined workers to populate rows
+        for i in range(self.total_workers):
+            # Default state if worker hasn't reported yet
+            status = self.worker_status.get(i, ("Idle", "Waiting..."))
+            status_text = status[0]
+            item_text = status[1]
+
+            # Dynamic styling based on status
+            style = "white"
+            if "Downloading" in status_text:
+                style = "bold green"
+            elif "Resolving" in status_text:
+                style = "bold yellow"
+            elif "Error" in status_text:
+                style = "bold red"
+            elif "Finished" in status_text:
+                style = "green"
+
+            table.add_row(f"#{i + 1}", f"[{style}]{status_text}[/]", item_text)
+
+        return Panel(table, title="[bold white]Orpheus Multi-Downloader[/]", border_style="blue")
 
     async def add(self, url: str):
         # Background streaming for Tidal artists
         tidal_artist_match = re.search(r'tidal\.com.*/artist/(\d+)', url)
-        
+
         if tidal_artist_match:
             artist_id = tidal_artist_match.group(1)
             task = asyncio.create_task(self._background_search_artist(artist_id))
             self.producer_tasks.append(task)
-            return 
+            return
 
         parsed = parse_url(url)
         if parsed is None: raise Exception(f"Unable to parse url {url}")
@@ -116,7 +156,7 @@ class Main:
     async def _background_search_artist(self, artist_id):
         try:
             client = await self.get_logged_in_client("tidal")
-            
+
             display_name = artist_id
             try:
                 artist_meta = await client.get_metadata(artist_id, "artist")
@@ -126,7 +166,7 @@ class Main:
                 pass
 
             console.print(f"[green]Streaming started: Searching releases for {display_name}...[/green]")
-            
+
             async for album_batch in client.get_artist_albums_stream(artist_id):
                 count = 0
                 for album in album_batch:
@@ -140,41 +180,93 @@ class Main:
 
     async def add_by_id(self, source: str, media_type: str, id: str):
         client = await self.get_logged_in_client(source)
-        if media_type == "track": item = PendingSingle(id, client, self.config, self.database)
-        elif media_type == "album": item = PendingAlbum(id, client, self.config, self.database)
-        elif media_type == "playlist": item = PendingPlaylist(id, client, self.config, self.database)
-        elif media_type == "label": item = PendingLabel(id, client, self.config, self.database)
-        elif media_type == "artist": item = PendingArtist(id, client, self.config, self.database)
-        else: raise Exception(media_type)
+        if media_type == "track":
+            item = PendingSingle(id, client, self.config, self.database)
+        elif media_type == "album":
+            item = PendingAlbum(id, client, self.config, self.database)
+        elif media_type == "playlist":
+            item = PendingPlaylist(id, client, self.config, self.database)
+        elif media_type == "label":
+            item = PendingLabel(id, client, self.config, self.database)
+        elif media_type == "artist":
+            item = PendingArtist(id, client, self.config, self.database)
+        else:
+            raise Exception(media_type)
         await self.queue.put(item)
 
     async def add_all(self, urls: list[str]):
         for url in urls:
-            try: await self.add(url)
-            except Exception as e: console.print(f"[red]Error adding {url}: {e}[/red]")
+            try:
+                await self.add(url)
+            except Exception as e:
+                console.print(f"[red]Error adding {url}: {e}[/red]")
 
     async def resolve(self):
-        pass 
+        pass
+
+        # --- UPDATED RIP METHOD WITH DASHBOARD ---
 
     async def rip(self):
-        # --- BALANCED MODE: 2 WORKERS ---
-        # Increased to 2 for better speed while maintaining stability
-        workers = [asyncio.create_task(self.worker_loop()) for _ in range(4)]
-        
+        # Create tasks for workers with their specific ID
+        workers = [asyncio.create_task(self.worker_loop(i)) for i in range(self.total_workers)]
+
         if self.producer_tasks:
             await asyncio.gather(*self.producer_tasks)
-        await self.queue.join()
+
+        # Use Rich Live to render the table continuously
+        with Live(self.generate_dashboard(), refresh_per_second=4) as live:
+            while not self.queue.empty():
+                live.update(self.generate_dashboard())
+                await asyncio.sleep(0.25)  # Refresh rate
+
+            # Wait for workers to finish the last items
+            await self.queue.join()
+            live.update(self.generate_dashboard())
+
         for w in workers: w.cancel()
 
-    async def worker_loop(self):
+    # --- UPDATED WORKER LOOP ---
+    async def worker_loop(self, worker_id: int):
+        self.worker_status[worker_id] = ("Idle", "Waiting for queue...")
+
         while True:
+            # Update status to searching
+            self.worker_status[worker_id] = ("Idle", "Checking queue...")
             pending_item = await self.queue.get()
+
             try:
+                # Try to get a preliminary name
+                display_name = "Unknown Item"
+                if hasattr(pending_item, 'id'): display_name = f"ID: {pending_item.id}"
+
+                # Update status: Resolving metadata
+                self.worker_status[worker_id] = ("Resolving", display_name)
+
                 media_item = await pending_item.resolve()
+
                 if media_item is not None:
+                    # Update name with real metadata if available
+                    if hasattr(media_item, 'title'): display_name = media_item.title
+                    if hasattr(media_item, 'artist') and hasattr(media_item.artist, 'name'):
+                        display_name = f"{media_item.artist.name} - {display_name}"
+
+                    # Update status: Downloading
+                    # Truncate long names to keep table clean
+                    short_name = (display_name[:45] + '..') if len(display_name) > 45 else display_name
+                    self.worker_status[worker_id] = ("Downloading", short_name)
+
                     await media_item.rip()
+
+                    # Update status: Done
+                    self.worker_status[worker_id] = ("Finished", short_name)
+                    await asyncio.sleep(0.5)  # Brief pause so user sees "Finished"
+                else:
+                    self.worker_status[worker_id] = ("Skipped", display_name)
+
             except Exception as e:
                 logger.error(f"Error processing item: {e}")
+                self.worker_status[worker_id] = ("Error", str(e)[:30])
+                await asyncio.sleep(3)  # Show error for a moment
             finally:
                 self.queue.task_done()
 
@@ -190,7 +282,9 @@ class Main:
                 await client.login()
         return client
 
-    async def __aenter__(self): return self
+    async def __aenter__(self):
+        return self
+
     async def __aexit__(self, *_):
         for client in self.clients.values():
             if hasattr(client, "session"): await client.session.close()
@@ -203,6 +297,7 @@ class Main:
             pass
         remove_artwork_tempdirs()
 
+
 def run_main():
     async def main():
         config = Config()
@@ -213,9 +308,14 @@ def run_main():
                 await ripper.rip()
             else:
                 print("No URLs provided.")
-    try: asyncio.run(main())
-    except KeyboardInterrupt: pass
-    except Exception as e: logger.exception("Error:", exc_info=e)
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        logger.exception("Error:", exc_info=e)
+
 
 if __name__ == "__main__":
     run_main()
