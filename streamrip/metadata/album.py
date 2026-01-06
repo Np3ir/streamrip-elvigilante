@@ -79,8 +79,13 @@ class AlbumMetadata:
         # Calculate initial
         if sort_name:
             initial = sort_name[0].upper()
-            # If NOT a Latin letter (A-Z, etc), goes to "#" folder
-            if not re.match(r'^[A-Z\u00C0-\u00FF]$', initial):
+
+            # --- CORRECCIÓN EL VIGILANTE ---
+            # Treat Æ, Œ and other ligatures as SYMBOLS (#), not letters.
+            if initial in ['Æ', 'Œ', 'Ð', 'Þ']:
+                initial = "#"
+            # If NOT a Latin letter (A-Z or Standard Accents), goes to "#" folder
+            elif not re.match(r'^[A-Z\u00C0-\u00FF]$', initial):
                 initial = "#"
         else:
             initial = "Unknown"
