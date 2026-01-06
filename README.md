@@ -187,3 +187,18 @@ I will not be responsible for how **you** use `streamrip`. By using `streamrip`,
 ## Sponsorship
 
 Consider becoming a Github sponsor for me if you enjoy my open source software.
+
+# Streamrip (Enhanced Edition)
+
+This is a fork of [streamrip](https://github.com/nathom/streamrip) with major improvements for stability, unicode support, and performance.
+
+### 🚀 Key Features & Fixes
+* **True Unicode & Symbol Support:** * Full support for CJK characters and Emojis.
+    * Windows-illegal characters (like `:`) are replaced with full-width unicode equivalents (`：`) instead of being removed or replaced with underscores. (e.g., "11:11" becomes "11：11").
+* **Smart Library Organization:**
+    * **Artist Initials:** Added `{artist_initials}` variable for folder structure.
+    * **# Grouping:** Symbols and numbers (0-9) are automatically grouped into a `#` folder instead of creating separate folders for '1', '2', etc.
+* **Tidal Fast-Streaming:** * Implemented asynchronous parallel processing for Tidal. The download starts immediately while the search continues in the background.
+* **Deezer Fix:** Restored functionality for Deezer downloads (fixed `NotImplementedError`).
+* **Robust Configuration:** * Forces loading `config.toml` from `%APPDATA%/streamrip/` on Windows to prevent configuration mismatch issues.
+* **Database Fixes:** Corrected database path resolution logic.
