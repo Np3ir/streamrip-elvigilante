@@ -1,113 +1,98 @@
-from dataclasses import dataclass
-from typing import Callable
-
-from rich.console import Group
-from rich.live import Live
+import logging
 from rich.progress import (
     BarColumn,
+    DownloadColumn,
     Progress,
+    SpinnerColumn,
     TextColumn,
     TimeRemainingColumn,
     TransferSpeedColumn,
+    TaskID
 )
-from rich.rule import Rule
-from rich.text import Text
 
-from .console import console
+logger = logging.getLogger("streamrip")
 
 
-class ProgressManager:
-    def __init__(self):
-        self.started = False
-        self.progress = Progress(console=console)
-        self.progress = Progress(
-            TextColumn("[cyan]{task.description}"),
-            BarColumn(bar_width=None),
-            "[progress.percentage]{task.percentage:>3.1f}%",
-            "•",
-            TransferSpeedColumn(),
-            "•",
-            TimeRemainingColumn(),
-            console=console,
-        )
+# --- CONFIGURACIÓN VISUAL (ESTILO CYBERPUNK) ---
+def get_progress() -> Progress:
+    return Progress(
+        # 1. Spinner Animado
+        SpinnerColumn(spinner_name="dots", style="bold magenta"),
 
-        self.task_titles = []
-        self.prefix = Text.assemble(("Downloading ", "bold cyan"), overflow="ellipsis")
-        self._text_cache = self.gen_title_text()
-        self.live = Live(Group(self._text_cache, self.progress), refresh_per_second=10)
+        # 2. Nombre del Archivo (Cyan Negrita)
+        TextColumn("[bold cyan]{task.fields[filename]}", justify="right"),
 
-    def get_callback(self, total: int, desc: str):
-        if not self.started:
-            self.live.start()
-            self.started = True
+        # 3. Barra de Progreso
+        BarColumn(
+            bar_width=40,
+            style="dim white",
+            complete_style="cyan",
+            finished_style="bold green"
+        ),
 
-        task = self.progress.add_task(f"[cyan]{desc}", total=total)
+        # 4. Porcentaje
+        "[progress.percentage]{task.percentage:>3.0f}%",
+        "•",
 
-        def _callback_update(x: int):
-            self.progress.update(task, advance=x)
-            self.live.update(Group(self.get_title_text(), self.progress))
+        # 5. Tamaño
+        DownloadColumn(),
+        "•",
 
-        def _callback_done():
-            self.progress.update(task, visible=False)
+        # 6. Velocidad
+        TransferSpeedColumn(),
+        "•",
 
-        return Handle(_callback_update, _callback_done)
+        # 7. Tiempo Restante
+        TimeRemainingColumn(),
 
-    def cleanup(self):
-        if self.started:
-            self.live.stop()
-
-    def add_title(self, title: str):
-        self.task_titles.append(title.strip())
-        self._text_cache = self.gen_title_text()
-
-    def remove_title(self, title: str):
-        self.task_titles.remove(title.strip())
-        self._text_cache = self.gen_title_text()
-
-    def gen_title_text(self) -> Rule:
-        titles = ", ".join(self.task_titles[:3])
-        if len(self.task_titles) > 3:
-            titles += "..."
-        t = self.prefix + Text(titles)
-        return Rule(t)
-
-    def get_title_text(self) -> Rule:
-        return self._text_cache
+        transient=True,
+        expand=True,
+    )
 
 
-@dataclass(slots=True)
-class Handle:
-    update: Callable[[int], None]
-    done: Callable[[], None]
-
-    def __enter__(self):
-        return self.update
-
-    def __exit__(self, *_):
-        self.done()
+# --- MAQUINARIA INTERNA ---
+_progress = get_progress()
 
 
-# global instance
-_p = ProgressManager()
+def add_title(filename: str) -> TaskID:
+    """Añade una tarea de descarga a la barra y la inicia si es necesario."""
+    if not _progress.live:
+        _progress.start()
+
+    # Añadimos la tarea con el campo 'filename' para el estilo visual
+    task_id = _progress.add_task("download", filename=filename, total=None)
+    return task_id
 
 
-def get_progress_callback(enabled: bool, total: int, desc: str) -> Handle:
-    global _p
-    if not enabled:
-        return Handle(lambda _: None, lambda: None)
-    return _p.get_callback(total, desc)
+def remove_title(task_id: TaskID):
+    """Elimina una tarea de la barra al terminar."""
+    try:
+        _progress.remove_task(task_id)
+    except KeyError:
+        pass
+
+    if not _progress.tasks:
+        _progress.stop()
 
 
-def add_title(title: str):
-    global _p
-    _p.add_title(title)
+# --- CORRECCIÓN AQUÍ: AÑADIDO TERCER ARGUMENTO ---
+def get_progress_callback(task_id: TaskID, total_size: int, description: str = ""):
+    """
+    Devuelve la función callback.
+    Aceptamos 'description' para evitar el error '3 arguments given',
+    aunque no lo usemos (ya que usamos add_title para el nombre).
+    """
 
+    if total_size:
+        _progress.update(task_id, total=total_size)
 
-def remove_title(title: str):
-    global _p
-    _p.remove_title(title)
+    def callback(current_bytes_read):
+        _progress.update(task_id, completed=current_bytes_read)
+
+    return callback
 
 
 def clear_progress():
-    global _p
-    _p.cleanup()
+    """Limpia forzosamente la barra de progreso."""
+    if _progress.live:
+        _progress.stop()

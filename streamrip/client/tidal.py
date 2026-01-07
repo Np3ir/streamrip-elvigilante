@@ -38,8 +38,9 @@ QUALITY_MAP = {
 
 class TidalClient(Client):
     """
-    TidalClient 'Auto-Refresh'.
-    Automatically refreshes token on 401 errors.
+    TidalClient 'Smart-Regulated' (Fix).
+    Removed explicit rate_limiter to prevent context manager errors.
+    Relying on Semaphore + Exponential Backoff for stability.
     """
 
     source = "tidal"
@@ -49,8 +50,16 @@ class TidalClient(Client):
         self.logged_in = False
         self.global_config = config
         self.config = config.session.tidal
-        self.rate_limiter = self.get_rate_limiter(30)
-        self.semaphore = asyncio.Semaphore(1)
+
+        # --- FIX: REMOVED BROKEN RATE LIMITER ---
+        # self.rate_limiter causing 'function object' error.
+        # We use semaphore + logic instead.
+
+        # Semaphore regulates concurrency (5 downloads at once)
+        self.semaphore = asyncio.Semaphore(5)
+
+        # Lock to prevent multiple workers refreshing token simultaneously
+        self.auth_lock = asyncio.Lock()
 
     def _log(self, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -58,8 +67,9 @@ class TidalClient(Client):
 
     async def login(self):
         jar = CookieJar(unsafe=True)
-        # Tank Mode connection settings
-        connector = TCPConnector(limit=1, force_close=True, enable_cleanup_closed=True)
+        # Optimized connection pool
+        connector = TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
+        # Generous timeouts for stability
         timeout = ClientTimeout(total=3600, connect=30, sock_read=60)
 
         self.session = ClientSession(
@@ -276,19 +286,27 @@ class TidalClient(Client):
                    "token_expiry": resp["expires_in"] + time.time()}
 
     async def _refresh_access_token(self):
-        logger.info("Refreshing Tidal access token...")
-        data = {"client_id": CLIENT_ID, "refresh_token": self.refresh_token, "grant_type": "refresh_token",
-                "scope": "r_usr+w_usr+w_sub"}
-        resp = await self._api_post(f"{AUTH_URL}/token", data, AUTH)
-        if resp.get("status", 200) != 200:
-            raise Exception("Refresh failed")
+        # THREAD-SAFE LOCK: Only one worker refreshes at a time
+        async with self.auth_lock:
+            if self.config.token_expiry and (float(self.config.token_expiry) - time.time() > 600):
+                return
 
-        # Update config and session headers
-        c = self.config
-        c.access_token = resp["access_token"]
-        c.token_expiry = resp["expires_in"] + time.time()
-        self._update_authorization_from_config()
-        logger.info("Tidal token refreshed successfully.")
+            logger.info("Refreshing Tidal access token...")
+            data = {"client_id": CLIENT_ID, "refresh_token": self.refresh_token, "grant_type": "refresh_token",
+                    "scope": "r_usr+w_usr+w_sub"}
+            try:
+                resp = await self._api_post(f"{AUTH_URL}/token", data, AUTH)
+                if resp.get("status", 200) != 200:
+                    raise Exception("Refresh failed")
+
+                c = self.config
+                c.access_token = resp["access_token"]
+                c.token_expiry = resp["expires_in"] + time.time()
+                self._update_authorization_from_config()
+                logger.info("Tidal token refreshed successfully.")
+            except Exception as e:
+                logger.error(f"Failed to refresh token: {e}")
+                raise e
 
     async def _get_device_code(self):
         if not hasattr(self, "session"): self.session = await self.get_session()
@@ -298,8 +316,7 @@ class TidalClient(Client):
 
     async def _api_post(self, url, data, auth: aiohttp.BasicAuth | None = None) -> dict:
         async with self.semaphore:
-            async with self.rate_limiter:
-                async with self.session.post(url, data=data, auth=auth) as resp: return await resp.json()
+            async with self.session.post(url, data=data, auth=auth) as resp: return await resp.json()
 
     async def _api_request(self, path: str, params=None, base: str = API_BASE, retries: int = 10) -> dict:
         if params is None: params = {}
@@ -307,48 +324,54 @@ class TidalClient(Client):
         if "limit" not in params: params["limit"] = 100
 
         for attempt in range(retries + 1):
+            # FIX: Removed 'async with self.rate_limiter' which was causing the error
             async with self.semaphore:
-                async with self.rate_limiter:
-                    url = path if path.startswith("http") else f"{base}/{path}"
+                url = path if path.startswith("http") else f"{base}/{path}"
 
-                    try:
-                        async with self.session.get(url, params=params) as resp:
-                            # 1. Handle Rate Limits
-                            if resp.status == 429:
-                                jitter = random.uniform(0.5, 3.0)
-                                wait = (15 * (2 ** attempt)) + jitter
-                                await asyncio.sleep(wait)
-                                continue
+                try:
+                    async with self.session.get(url, params=params) as resp:
+                        # --- 1. SMART AUTO-REGULATION ---
+                        if resp.status == 429:
+                            retry_after = resp.headers.get("Retry-After")
+                            if retry_after:
+                                wait = int(retry_after) + 1
+                                logger.warning(f"Tidal says STOP. Cooling down for {wait}s...")
+                            else:
+                                jitter = random.uniform(0.5, 2.0)
+                                wait = (5 * (2 ** attempt)) + jitter
+                                logger.warning(f"Rate Limit hit. Backing off for {wait:.1f}s...")
 
-                            # 2. Handle 401 UNAUTHORIZED (Expired Token)
-                            if resp.status == 401:
-                                if attempt < 2:  # Prevent infinite loops
-                                    await asyncio.sleep(1)
-                                    await self._refresh_access_token()
-                                    continue  # Retry the same request with new token
-                                else:
-                                    raise Exception("Tidal returned 401 (Unauthorized) repeatedly.")
-
-                            # 3. Handle 404
-                            if resp.status == 404:
-                                raise NonStreamableError("TIDAL: Resource not found (404)")
-
-                            # 4. Standard check
-                            resp.raise_for_status()
-
-                            try:
-                                return await resp.json()
-                            except:
-                                return json.loads(await resp.text())
-
-                    except aiohttp.ClientOSError:
-                        await asyncio.sleep(1)
-                        continue
-                    except Exception as e:
-                        if "401" in str(e) and attempt < 2:
-                            await self._refresh_access_token()
+                            await asyncio.sleep(wait)
                             continue
-                        if attempt == retries:
-                            raise e
+
+                        # --- 2. AUTHENTICATION REFRESH ---
+                        if resp.status == 401:
+                            if attempt < 2:
+                                logger.warning("Token expired (401). refreshing...")
+                                await asyncio.sleep(1)
+                                await self._refresh_access_token()
+                                continue
+                            else:
+                                raise Exception("Tidal returned 401 (Unauthorized) repeatedly.")
+
+                        # --- 3. RESOURCE MISSING ---
+                        if resp.status == 404:
+                            raise NonStreamableError("TIDAL: Resource not found (404)")
+
+                        resp.raise_for_status()
+                        try:
+                            return await resp.json()
+                        except:
+                            return json.loads(await resp.text())
+
+                except aiohttp.ClientOSError:
+                    await asyncio.sleep(1)
+                    continue
+                except Exception as e:
+                    if "401" in str(e) and attempt < 2:
+                        await self._refresh_access_token()
+                        continue
+                    if attempt == retries:
+                        raise e
 
         raise Exception(f"Connection failed after {retries} retries.")
