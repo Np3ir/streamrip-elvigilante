@@ -36,11 +36,22 @@ QUALITY_MAP = {
 }
 
 
+# --- FIX: DUMMY LIMITER ---
+# Creamos un objeto vacío que acepte "async with" para engañar
+# a cualquier parte del código que espere un rate_limiter tradicional.
+class DummyLimiter:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        pass
+
+
 class TidalClient(Client):
     """
-    TidalClient 'Smart-Regulated' (Fix).
-    Removed explicit rate_limiter to prevent context manager errors.
-    Relying on Semaphore + Exponential Backoff for stability.
+    TidalClient 'Smart-Regulated' + Dummy Fix.
+    Includes a DummyLimiter to prevent context manager errors,
+    while using internal logic for actual throttling.
     """
 
     source = "tidal"
@@ -51,11 +62,12 @@ class TidalClient(Client):
         self.global_config = config
         self.config = config.session.tidal
 
-        # --- FIX: REMOVED BROKEN RATE LIMITER ---
-        # self.rate_limiter causing 'function object' error.
-        # We use semaphore + logic instead.
+        # --- FIX: USE DUMMY LIMITER ---
+        # Esto evita el error "'function' object does not support context manager"
+        # Satisfacemos la estructura de la clase padre sin frenar la descarga.
+        self.rate_limiter = DummyLimiter()
 
-        # Semaphore regulates concurrency (5 downloads at once)
+        # Real Traffic Control: Semaphore (5 concurrent requests)
         self.semaphore = asyncio.Semaphore(5)
 
         # Lock to prevent multiple workers refreshing token simultaneously
@@ -316,6 +328,7 @@ class TidalClient(Client):
 
     async def _api_post(self, url, data, auth: aiohttp.BasicAuth | None = None) -> dict:
         async with self.semaphore:
+            # Quitamos self.rate_limiter de aquí, usamos solo semáforo
             async with self.session.post(url, data=data, auth=auth) as resp: return await resp.json()
 
     async def _api_request(self, path: str, params=None, base: str = API_BASE, retries: int = 10) -> dict:
@@ -324,7 +337,6 @@ class TidalClient(Client):
         if "limit" not in params: params["limit"] = 100
 
         for attempt in range(retries + 1):
-            # FIX: Removed 'async with self.rate_limiter' which was causing the error
             async with self.semaphore:
                 url = path if path.startswith("http") else f"{base}/{path}"
 
@@ -335,7 +347,7 @@ class TidalClient(Client):
                             retry_after = resp.headers.get("Retry-After")
                             if retry_after:
                                 wait = int(retry_after) + 1
-                                logger.warning(f"Tidal says STOP. Cooling down for {wait}s...")
+                                logger.warning(f"Rate Limit hit. Backing off for {wait}s...")
                             else:
                                 jitter = random.uniform(0.5, 2.0)
                                 wait = (5 * (2 ** attempt)) + jitter
