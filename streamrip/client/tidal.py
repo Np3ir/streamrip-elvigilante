@@ -10,6 +10,8 @@ from json import JSONDecodeError
 
 import aiohttp
 from aiohttp import TCPConnector, CookieJar, ClientSession, ClientTimeout
+# --- FIX: IMPORTAMOS LA HERRAMIENTA OFICIAL ---
+from aiolimiter import AsyncLimiter
 
 from ..config import Config
 from ..exceptions import NonStreamableError
@@ -36,22 +38,12 @@ QUALITY_MAP = {
 }
 
 
-# --- FIX: DUMMY LIMITER ---
-# Creamos un objeto vacío que acepte "async with" para engañar
-# a cualquier parte del código que espere un rate_limiter tradicional.
-class DummyLimiter:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        pass
-
-
 class TidalClient(Client):
     """
-    TidalClient 'Smart-Regulated' + Dummy Fix.
-    Includes a DummyLimiter to prevent context manager errors,
-    while using internal logic for actual throttling.
+    TidalClient 'Smart-Regulated' (Final Fix).
+    Uses real AsyncLimiter to satisfy media.py checks,
+    but configured to be non-restrictive (100 req/s).
+    Real throttling is handled by the smart logic loop.
     """
 
     source = "tidal"
@@ -62,15 +54,16 @@ class TidalClient(Client):
         self.global_config = config
         self.config = config.session.tidal
 
-        # --- FIX: USE DUMMY LIMITER ---
-        # Esto evita el error "'function' object does not support context manager"
-        # Satisfacemos la estructura de la clase padre sin frenar la descarga.
-        self.rate_limiter = DummyLimiter()
+        # --- FIX: USO DE ASYNCLIMITER REAL ---
+        # Usamos el objeto real que espera el programa para evitar el error de "function object".
+        # Lo configuramos a 100 peticiones por segundo (básicamente ilimitado)
+        # para que no interfiera con nuestra lógica inteligente de abajo.
+        self.rate_limiter = AsyncLimiter(100, 1)
 
-        # Real Traffic Control: Semaphore (5 concurrent requests)
+        # Semáforo para controlar concurrencia real (5 descargas a la vez)
         self.semaphore = asyncio.Semaphore(5)
 
-        # Lock to prevent multiple workers refreshing token simultaneously
+        # Candado para renovación de token
         self.auth_lock = asyncio.Lock()
 
     def _log(self, message: str):
@@ -79,9 +72,9 @@ class TidalClient(Client):
 
     async def login(self):
         jar = CookieJar(unsafe=True)
-        # Optimized connection pool
+        # Connector robusto
         connector = TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
-        # Generous timeouts for stability
+        # Timeouts generosos
         timeout = ClientTimeout(total=3600, connect=30, sock_read=60)
 
         self.session = ClientSession(
@@ -298,7 +291,6 @@ class TidalClient(Client):
                    "token_expiry": resp["expires_in"] + time.time()}
 
     async def _refresh_access_token(self):
-        # THREAD-SAFE LOCK: Only one worker refreshes at a time
         async with self.auth_lock:
             if self.config.token_expiry and (float(self.config.token_expiry) - time.time() > 600):
                 return
@@ -328,7 +320,6 @@ class TidalClient(Client):
 
     async def _api_post(self, url, data, auth: aiohttp.BasicAuth | None = None) -> dict:
         async with self.semaphore:
-            # Quitamos self.rate_limiter de aquí, usamos solo semáforo
             async with self.session.post(url, data=data, auth=auth) as resp: return await resp.json()
 
     async def _api_request(self, path: str, params=None, base: str = API_BASE, retries: int = 10) -> dict:
@@ -347,7 +338,7 @@ class TidalClient(Client):
                             retry_after = resp.headers.get("Retry-After")
                             if retry_after:
                                 wait = int(retry_after) + 1
-                                logger.warning(f"Rate Limit hit. Backing off for {wait}s...")
+                                logger.warning(f"Tidal says STOP. Cooling down for {wait}s...")
                             else:
                                 jitter = random.uniform(0.5, 2.0)
                                 wait = (5 * (2 ** attempt)) + jitter
