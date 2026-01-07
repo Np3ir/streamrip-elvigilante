@@ -10,8 +10,6 @@ from json import JSONDecodeError
 
 import aiohttp
 from aiohttp import TCPConnector, CookieJar, ClientSession, ClientTimeout
-# --- FIX: IMPORTAMOS LA HERRAMIENTA OFICIAL ---
-from aiolimiter import AsyncLimiter
 
 from ..config import Config
 from ..exceptions import NonStreamableError
@@ -40,10 +38,9 @@ QUALITY_MAP = {
 
 class TidalClient(Client):
     """
-    TidalClient 'Smart-Regulated' (Final Fix).
-    Uses real AsyncLimiter to satisfy media.py checks,
-    but configured to be non-restrictive (100 req/s).
-    Real throttling is handled by the smart logic loop.
+    TidalClient 'Smart-Regulated' (Compatibility Fix).
+    - Uses native get_rate_limiter(100) to satisfy streamrip internals (media.py).
+    - Uses Semaphore(5) and logic for real traffic control.
     """
 
     source = "tidal"
@@ -54,11 +51,11 @@ class TidalClient(Client):
         self.global_config = config
         self.config = config.session.tidal
 
-        # --- FIX: USO DE ASYNCLIMITER REAL ---
-        # Usamos el objeto real que espera el programa para evitar el error de "function object".
-        # Lo configuramos a 100 peticiones por segundo (básicamente ilimitado)
-        # para que no interfiera con nuestra lógica inteligente de abajo.
-        self.rate_limiter = AsyncLimiter(100, 1)
+        # --- FIX: COMPATIBILIDAD NATIVA ---
+        # Usamos el método original de la clase padre para crear el limitador.
+        # Ponemos 100 (muy alto) para que no frene nada; el freno real
+        # lo ponemos nosotros abajo con el Semaphore y la lógica 429.
+        self.rate_limiter = self.get_rate_limiter(100)
 
         # Semáforo para controlar concurrencia real (5 descargas a la vez)
         self.semaphore = asyncio.Semaphore(5)
@@ -333,7 +330,7 @@ class TidalClient(Client):
 
                 try:
                     async with self.session.get(url, params=params) as resp:
-                        # --- 1. SMART AUTO-REGULATION ---
+                        # --- 1. SMART AUTO-REGULATION (Backoff) ---
                         if resp.status == 429:
                             retry_after = resp.headers.get("Retry-After")
                             if retry_after:

@@ -1,98 +1,169 @@
 import logging
+import sys
+import os
+from typing import Callable
+
+# Enable ANSI colors on Windows consoles
+os.system("")
+
+from rich.console import Console, Group
+from rich.live import Live
 from rich.progress import (
-    BarColumn,
-    DownloadColumn,
     Progress,
     SpinnerColumn,
     TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-    TaskID
 )
+from rich.rule import Rule
+from rich.text import Text
 
 logger = logging.getLogger("streamrip")
 
-
-# --- CONFIGURACIÓN VISUAL (ESTILO CYBERPUNK) ---
-def get_progress() -> Progress:
-    return Progress(
-        # 1. Spinner Animado
-        SpinnerColumn(spinner_name="dots", style="bold magenta"),
-
-        # 2. Nombre del Archivo (Cyan Negrita)
-        TextColumn("[bold cyan]{task.fields[filename]}", justify="right"),
-
-        # 3. Barra de Progreso
-        BarColumn(
-            bar_width=40,
-            style="dim white",
-            complete_style="cyan",
-            finished_style="bold green"
-        ),
-
-        # 4. Porcentaje
-        "[progress.percentage]{task.percentage:>3.0f}%",
-        "•",
-
-        # 5. Tamaño
-        DownloadColumn(),
-        "•",
-
-        # 6. Velocidad
-        TransferSpeedColumn(),
-        "•",
-
-        # 7. Tiempo Restante
-        TimeRemainingColumn(),
-
-        transient=True,
-        expand=True,
-    )
+# Use stderr and force terminal to ensure visibility on Windows/PowerShell
+_console = Console(file=sys.stderr, force_terminal=True, force_interactive=True)
 
 
-# --- MAQUINARIA INTERNA ---
-_progress = get_progress()
-
-
-def add_title(filename: str) -> TaskID:
-    """Añade una tarea de descarga a la barra y la inicia si es necesario."""
-    if not _progress.live:
-        _progress.start()
-
-    # Añadimos la tarea con el campo 'filename' para el estilo visual
-    task_id = _progress.add_task("download", filename=filename, total=None)
-    return task_id
-
-
-def remove_title(task_id: TaskID):
-    """Elimina una tarea de la barra al terminar."""
-    try:
-        _progress.remove_task(task_id)
-    except KeyError:
-        pass
-
-    if not _progress.tasks:
-        _progress.stop()
-
-
-# --- CORRECCIÓN AQUÍ: AÑADIDO TERCER ARGUMENTO ---
-def get_progress_callback(task_id: TaskID, total_size: int, description: str = ""):
+class ProgressManager:
     """
-    Devuelve la función callback.
-    Aceptamos 'description' para evitar el error '3 arguments given',
-    aunque no lo usemos (ya que usamos add_title para el nombre).
+    Rich 'Live' progress manager - Text Only (White).
+    
+    No bars, no numbers. Just the list of what's happening.
+    ── Processing: 3 items... ──
+    ⠋ [FLAC 24/96] Artist - Track
     """
 
-    if total_size:
-        _progress.update(task_id, total=total_size)
+    def __init__(self):
+        self.started = False
+        self.task_titles: list[str] = []
 
-    def callback(current_bytes_read):
-        _progress.update(task_id, completed=current_bytes_read)
+        self.progress = Progress(
+            # 1. Spinner in White (Indicator of life)
+            SpinnerColumn(spinner_name="dots", style="bold white"),
+            
+            # 2. Description in White (The only info)
+            TextColumn("[bold white]{task.description}"),
+            
+            # REMOVED: BarColumn. 
+            # Now it's just text.
+            
+            console=_console,
+            transient=False,
+            expand=False, # Don't stretch, just list them nicely
+        )
 
-    return callback
+        self._header = self._build_header()
+
+        self.live = Live(
+            Group(self._header, self.progress),
+            console=_console,
+            refresh_per_second=10,
+            transient=False,
+        )
+
+    def _build_header(self) -> Rule:
+        titles = ", ".join(self.task_titles[:3])
+        if len(self.task_titles) > 3:
+            titles += "..."
+        
+        # Clean White Header
+        header_text = Text("Processing: ", style="dim white") + Text(titles, style="bold white")
+        return Rule(header_text, style="white")
+
+    def _refresh(self):
+        self._header = self._build_header()
+        if self.started:
+            try:
+                self.live.update(Group(self._header, self.progress))
+            except Exception:
+                pass
+
+    def _ensure_started(self):
+        if not self.started:
+            try:
+                self.live.start()
+                self.started = True
+            except Exception:
+                pass
+
+    def add_title(self, title: str):
+        title = (title or "").strip()
+        if title:
+            self.task_titles.append(title)
+            self._refresh()
+
+    def remove_title(self, title: str):
+        title = (title or "").strip()
+        if title in self.task_titles:
+            self.task_titles.remove(title)
+            self._refresh()
+
+    def cleanup(self):
+        if self.started:
+            try:
+                self.live.stop()
+            except Exception:
+                pass
+        self.started = False
+
+    def get_callback(self, total: int, description: str) -> Callable[[int], None]:
+        self._ensure_started()
+
+        # Handle unknown totals safely
+        rich_total = int(total) if total and total > 0 else None
+        
+        task_id = self.progress.add_task(description, total=rich_total)
+
+        # State to track the last absolute position
+        state = {"last_abs": 0}
+
+        def callback(current_bytes: int):
+            try:
+                current = int(current_bytes or 0)
+            except Exception:
+                current = 0
+
+            # FORCE ABSOLUTE LOGIC
+            delta = current - state["last_abs"]
+            if delta < 0: 
+                delta = 0
+            state["last_abs"] = current
+
+            try:
+                # We still 'advance' the task internally so Rich knows it's working
+                self.progress.update(task_id, advance=delta)
+            except Exception:
+                pass
+
+            # Finish detection
+            if rich_total is not None and current >= rich_total:
+                try:
+                    self.progress.update(task_id, visible=False)
+                except Exception:
+                    pass
+
+            self._refresh()
+
+        return callback
+
+
+# Global Instance
+_pm = ProgressManager()
+
+
+def get_progress():
+    return _pm.progress
+
+
+def add_title(description: str):
+    _pm.add_title(description)
+
+
+def remove_title(description: str):
+    _pm.remove_title(description)
+
+
+def get_progress_callback(enabled: bool, total_size: int, description: str = ""):
+    return _pm.get_callback(int(total_size or 0), str(description or ""))
 
 
 def clear_progress():
-    """Limpia forzosamente la barra de progreso."""
-    if _progress.live:
-        _progress.stop()
+    _pm.cleanup()

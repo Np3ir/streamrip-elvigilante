@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re  # <--- Importante para buscar el texto (feat.)
 from dataclasses import dataclass
 
 from .. import converter
@@ -8,7 +9,6 @@ from ..client import Client, Downloadable
 from ..config import Config
 from ..db import Database
 from ..exceptions import NonStreamableError
-# AHORA SÍ importamos la función mejorada desde utils
 from ..filepath_utils import clean_filename
 from ..metadata import AlbumMetadata, Covers, TrackMetadata, tag_file
 from ..progress import add_title, get_progress_callback, remove_title
@@ -42,41 +42,68 @@ class Track(Media):
 
         if os.path.isfile(self.download_path):
             if self.db.downloaded(self.meta.info.id):
-                logger.info(f"[✓] Track already exists: {self.download_path}")
+                # SILENCED: Track already exists
                 return
             else:
                 logger.info(f"[!] Track on disk but not in DB. Registering: {self.download_path}")
                 self.db.set_downloaded(self.meta.info.id)
                 return
         elif self.db.downloaded(self.meta.info.id):
-            logger.info(f"[⚠] Track in DB but missing. Redownloading: {self.download_path}")
+            # SILENCED: Track in DB but missing
+            pass
 
         async with global_download_semaphore(self.config.session.downloads):
-            with get_progress_callback(
+            # --- INFO BUILDER ---
+            codec = self.downloadable.extension.upper()
+            specs = []
+            
+            if hasattr(self.meta.info, 'bit_depth') and self.meta.info.bit_depth:
+                specs.append(f"{self.meta.info.bit_depth}bit")
+            
+            if hasattr(self.meta.info, 'sampling_rate') and self.meta.info.sampling_rate:
+                try:
+                    khz = float(self.meta.info.sampling_rate) / 1000
+                    khz_str = f"{khz:g}" 
+                    specs.append(f"{khz_str}kHz")
+                except:
+                    pass
+
+            tech_str = f"[{codec}"
+            if specs:
+                tech_str += f" {'/'.join(specs)}]"
+            else:
+                tech_str += "]"
+
+            # Format: "[FLAC 24/96] Artist - Title"
+            full_desc = f"{tech_str} {self.meta.artist} - {self.meta.title}"
+
+            callback = get_progress_callback(
                     self.config.session.cli.progress_bars,
                     await self.downloadable.size(),
-                    f"Track {self.meta.tracknumber}",
-            ) as callback:
-                try:
-                    await self.downloadable.download(self.download_path, callback)
-                    retry = False
-                except Exception as e:
-                    logger.error(f"Error downloading '{self.meta.title}', retrying: {e}")
-                    retry = True
+                    full_desc 
+            )
+            
+            retry = False
+            try:
+                await self.downloadable.download(self.download_path, callback)
+            except Exception as e:
+                logger.error(f"Error downloading '{self.meta.title}', retrying: {e}")
+                retry = True
 
             if not retry:
                 return
 
-            with get_progress_callback(
+            callback_retry = get_progress_callback(
                     self.config.session.cli.progress_bars,
                     await self.downloadable.size(),
-                    f"Track {self.meta.tracknumber} (retry)",
-            ) as callback:
-                try:
-                    await self.downloadable.download(self.download_path, callback)
-                except Exception as e:
-                    logger.error(f"Persistent error '{self.meta.title}', skipping: {e}")
-                    self.db.set_failed(self.downloadable.source, "track", self.meta.info.id)
+                    f"{full_desc} (retry)"
+            )
+            
+            try:
+                await self.downloadable.download(self.download_path, callback_retry)
+            except Exception as e:
+                logger.error(f"Persistent error '{self.meta.title}', skipping: {e}")
+                self.db.set_failed(self.downloadable.source, "track", self.meta.info.id)
 
     async def postprocess(self):
         if self.is_single:
@@ -104,10 +131,25 @@ class Track(Media):
         c = self.config.session.filepaths
         formatter = c.track_format
         track_path = self.meta.format_track_path(formatter)
+        
+        # --- LÓGICA INTELIGENTE PARA ELIMINAR FEATURINGS ---
+        # 1. Busca patrones como "(feat. Nombre)" o "(ft. Nombre)"
+        # match.group(0) es todo el texto: "(feat. NAV)"
+        # match.group(1) es solo el nombre: "NAV"
+        match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
+        
+        if match:
+            feat_artist = match.group(1) # Extraemos "NAV"
+            # 2. Verificamos si "NAV" ya está en la etiqueta principal de Artista
+            # Usamos .lower() para evitar problemas de mayúsculas/minúsculas
+            if feat_artist.lower() in self.meta.artist.lower():
+                # 3. Si está duplicado, borramos el "(feat. NAV)" del nombre del archivo
+                track_path = track_path.replace(match.group(0), "")
+        # ----------------------------------------------------
+
         if self.meta.info.explicit and "explicit" not in track_path.lower():
             track_path += " [Explicit]"
 
-        # Usa la función centralizada que ahora soporta Unicode
         track_path = clean_filename(track_path, restrict=c.restrict_characters)
 
         if c.truncate_to > 0 and len(track_path) > c.truncate_to:
@@ -163,7 +205,6 @@ class PendingTrack(Pending):
         if meta.info.explicit and "explicit" not in track_path.lower():
             track_path += " [Explicit]"
 
-        # Unicode centralizado
         track_path = clean_filename(track_path, restrict=c.restrict_characters)
 
         if c.truncate_to > 0 and len(track_path) > c.truncate_to:
@@ -172,10 +213,11 @@ class PendingTrack(Pending):
         full_path = os.path.join(folder, f"{track_path}.{default_ext}")
 
         if self.db.downloaded(self.id) and os.path.isfile(full_path):
-            logger.info(f"Skipping track {self.id}. Exists.")
+            # SILENCED
             return None
         elif self.db.downloaded(self.id):
-            logger.warning(f"Track {self.id} in DB but missing. Re-downloading.")
+            # SILENCED
+            pass
 
         return Track(meta, downloadable, self.config, folder, self.cover_path, self.db)
 
@@ -221,7 +263,6 @@ class PendingSingle(Pending):
         quality = getattr(config, self.client.source).quality
         parent = config.downloads.folder
 
-        # La carpeta tambien tendra caracteres especiales gracias a filepath_utils
         folder = os.path.join(parent, self._format_folder(album)) if config.filepaths.add_singles_to_folder else parent
         os.makedirs(folder, exist_ok=True)
 

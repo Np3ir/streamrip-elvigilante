@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shutil
+import time  # Importante para el retry
 
 import aiohttp
 from PIL import Image
@@ -16,24 +17,47 @@ logger = logging.getLogger("streamrip")
 
 
 def remove_artwork_tempdirs():
+    """
+    Intenta eliminar los directorios temporales de arte.
+    Incluye lógica de reintento para evitar [WinError 32] en Windows.
+    """
     logger.debug("Removing dirs %s", _artwork_tempdirs)
-    for path in _artwork_tempdirs:
-        try:
-            shutil.rmtree(path)
-        except FileNotFoundError:
-            pass
-        except PermissionError as e:
-            logger.warning(f"PermissionError removing {path}: {e}")
-        except Exception as e:
-            logger.warning(f"Error removing artwork tempdir {path}: {e}")
+
+    dirs_to_remove = list(_artwork_tempdirs)
+
+    for path in dirs_to_remove:
+        # Intentamos hasta 3 veces borrar la carpeta
+        for attempt in range(3):
+            try:
+                if os.path.exists(path):
+                    shutil.rmtree(path)
+                # Si llegamos aquí, se borró o no existía.
+                # Lo sacamos del set global si es posible (opcional, pero limpio)
+                if path in _artwork_tempdirs:
+                    _artwork_tempdirs.remove(path)
+                break  # Éxito, salimos del bucle de intentos
+
+            except FileNotFoundError:
+                break  # Ya no existe, trabajo hecho
+
+            except PermissionError:
+                # Windows bloqueó el archivo. Esperamos un poco.
+                if attempt < 2:
+                    time.sleep(0.5)
+                else:
+                    logger.warning(f"Could not remove temp artwork dir after 3 retries: {path}")
+
+            except Exception as e:
+                logger.warning(f"Error removing artwork tempdir {path}: {e}")
+                break
 
 
 async def download_artwork(
-    session: aiohttp.ClientSession,
-    folder: str,
-    covers: Covers,
-    config: ArtworkConfig,
-    for_playlist: bool,
+        session: aiohttp.ClientSession,
+        folder: str,
+        covers: Covers,
+        config: ArtworkConfig,
+        for_playlist: bool,
 ) -> tuple[str | None, str | None]:
     """Download artwork and update passed Covers object with filepaths.
 
