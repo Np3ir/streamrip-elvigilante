@@ -74,7 +74,7 @@ cd streamrip-enhanced
 pip install -r requirements.txt
 
 # Configure your credentials
-streamrip config
+rip config
 
 # Start downloading
 rip url "https://tidal.com/artist/10256676"
