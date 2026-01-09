@@ -40,57 +40,22 @@ class Track(Media):
         if not self.download_path:
             self._set_download_path()
 
-        # ================================================================
-        # FIX: Verificar ARCHIVO FÍSICO primero, luego DB
-        # ================================================================
-        file_exists = os.path.isfile(self.download_path)
-        in_database = self.db.downloaded(self.meta.info.id)
-        
-        if file_exists and in_database:
-            # Caso 1: Archivo existe Y está en DB → Skip (todo correcto)
-            logger.debug(f"[SKIP] File exists and in DB: {self.download_path}")
+        # Verificar si el archivo existe físicamente
+        if os.path.isfile(self.download_path):
+            # Archivo existe - registrar en DB si no está
+            if not self.db.downloaded(self.meta.info.id):
+                logger.info(f"[!] Track exists on disk but not in database. Registering: {os.path.basename(self.download_path)}")
+                self.db.set_downloaded(self.meta.info.id)
             return
-        
-        elif file_exists and not in_database:
-            # Caso 2: Archivo existe pero NO está en DB → Registrar en DB
-            logger.info(f"[REGISTER] File exists but not in DB, registering: {self.download_path}")
-            self.db.set_downloaded(self.meta.info.id)
-            return
-        
-        elif not file_exists and in_database:
-            # Caso 3: Archivo NO existe pero SÍ está en DB → Advertir y re-descargar
-            logger.warning(f"[RE-DOWNLOAD] File missing but in DB, re-downloading: {self.download_path}")
-            # Continuamos con la descarga (no return)
-        
-        # Caso 4: NO existe y NO está en DB → Descarga normal
-        # ================================================================
 
+        # Si llegamos aquí, el archivo NO existe - proceder con descarga
         async with global_download_semaphore(self.config.session.downloads):
-            # Build description
-            codec = self.downloadable.extension.upper()
-            specs = []
-            
-            if hasattr(self.meta.info, 'bit_depth') and self.meta.info.bit_depth:
-                specs.append(f"{self.meta.info.bit_depth}bit")
-            
-            if hasattr(self.meta.info, 'sampling_rate') and self.meta.info.sampling_rate:
-                try:
-                    khz = float(self.meta.info.sampling_rate) / 1000
-                    khz_str = f"{khz:g}"
-                    specs.append(f"{khz_str}kHz")
-                except:
-                    pass
-
-            tech_str = f"[{codec}"
-            if specs:
-                tech_str += f" {'/'.join(specs)}]"
-            else:
-                tech_str += "]"
-
+            # Formato simple: número, artista y título
             artist = self.meta.artist if (self.meta.artist and self.meta.artist.strip()) else "Unknown Artist"
             title = self.meta.title if (self.meta.title and self.meta.title.strip()) else f"Track {self.meta.tracknumber}"
             
-            full_desc = f"{tech_str} {artist} - {title}"
+            track_num = str(self.meta.tracknumber).zfill(2)
+            full_desc = f"{track_num} {artist} - {title}"
 
             callback = get_progress_callback(
                 self.config.session.cli.progress_bars,
@@ -147,7 +112,7 @@ class Track(Media):
         formatter = c.track_format
         track_path = self.meta.format_track_path(formatter)
         
-        # Remove duplicate featuring artists from filename
+        # Eliminar featuring duplicado
         match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
         
         if match:
@@ -180,15 +145,82 @@ class PendingTrack(Pending):
         source = self.client.source
         
         # ================================================================
-        # FIX: NO verificar DB aquí, dejar que Track.download() lo maneje
-        # De esta forma, Track.download() puede verificar el archivo físico
+        # OPCIÓN C: HÍBRIDO - Verificar DB primero
         # ================================================================
-        # COMENTADO: Esta verificación se mueve a Track.download()
-        # if self.db.downloaded(self.id):
-        #     logger.info(f"Skipping track {self.id}. Marked as downloaded in the database.")
-        #     return None
-        # ================================================================
+        if self.db.downloaded(self.id):
+            # Está en DB - necesitamos verificar archivo físico
+            # Para eso necesitamos construir la ruta del archivo
+            
+            try:
+                resp = await self.client.get_metadata(self.id, "track")
+            except NonStreamableError as e:
+                logger.error(f"Track {self.id} unavailable on {source}: {e}")
+                return None
+
+            try:
+                meta = TrackMetadata.from_resp(self.album, source, resp)
+            except Exception as e:
+                logger.error(f"Error building metadata {self.id}: {e}")
+                return None
+
+            if meta is None:
+                self.db.set_failed(source, "track", self.id)
+                return None
+
+            # Construir ruta del archivo para verificar
+            downloads_config = self.config.session.downloads
+            if downloads_config.disc_subdirectories and self.album.disctotal > 1:
+                folder = os.path.join(self.folder, f"Disc {meta.discnumber}")
+            else:
+                folder = self.folder
+            
+            c = self.config.session.filepaths
+            formatter = c.track_format
+            track_path = meta.format_track_path(formatter)
+            
+            # Eliminar featuring duplicado
+            match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
+            if match:
+                feat_artist = match.group(1)
+                if feat_artist.lower() in meta.artist.lower():
+                    track_path = track_path.replace(match.group(0), "")
+
+            if meta.info.explicit and "explicit" not in track_path.lower():
+                track_path += " [Explicit]"
+
+            track_path = clean_filename(track_path, restrict=c.restrict_characters)
+            if c.truncate_to > 0 and len(track_path) > c.truncate_to:
+                track_path = track_path[: c.truncate_to]
+
+            # Necesitamos saber la extensión - obtener downloadable
+            quality = self.config.session.get_source(source).quality
+            try:
+                downloadable = await self.client.get_downloadable(self.id, quality)
+            except NonStreamableError as e:
+                logger.error(f"Error getting download info {self.id}: {e}")
+                return None
+
+            file_path = os.path.join(folder, f"{track_path}.{downloadable.extension}")
+            
+            # Verificar si el archivo existe físicamente
+            if os.path.isfile(file_path):
+                # Archivo existe y está en DB - Skip silencioso
+                logger.info(f"[✓] Track already exists and registered: {os.path.basename(file_path)}")
+                return None
+            else:
+                # Archivo NO existe pero está en DB - Re-descarga
+                logger.warning(f"[!] Track in database but file missing. Re-downloading: {os.path.basename(file_path)}")
+                # Continuar y crear Track para re-descargar
+                try:
+                    cover_path = self.cover_path
+                except:
+                    cover_path = None
+                
+                return Track(meta, downloadable, self.config, folder, cover_path, self.db)
         
+        # ================================================================
+        # NO está en DB - Descarga normal
+        # ================================================================
         try:
             resp = await self.client.get_metadata(self.id, "track")
         except NonStreamableError as e:
@@ -229,14 +261,73 @@ class PendingSingle(Pending):
     db: Database
 
     async def resolve(self) -> Track | None:
-        # ================================================================
-        # FIX: NO verificar DB aquí tampoco
-        # ================================================================
-        # COMENTADO:
-        # if self.db.downloaded(self.id):
-        #     return None
-        # ================================================================
+        # Para singles, aplicar misma lógica híbrida
+        if self.db.downloaded(self.id):
+            # Verificar archivo físico
+            try:
+                resp = await self.client.get_metadata(self.id, "track")
+            except NonStreamableError as e:
+                logger.error(f"Error fetching track {self.id}: {e}")
+                return None
 
+            try:
+                album = AlbumMetadata.from_track_resp(resp, self.client.source)
+            except Exception as e:
+                logger.error(f"Error building album meta {self.id}: {e}")
+                return None
+
+            if album is None:
+                self.db.set_failed(self.client.source, "track", self.id)
+                return None
+
+            try:
+                meta = TrackMetadata.from_resp(album, self.client.source, resp)
+            except Exception as e:
+                logger.error(f"Error building track meta {self.id}: {e}")
+                return None
+
+            if meta is None:
+                self.db.set_failed(self.client.source, "track", self.id)
+                return None
+
+            config = self.config.session
+            quality = getattr(config, self.client.source).quality
+            parent = config.downloads.folder
+            folder = os.path.join(parent, self._format_folder(album)) if config.filepaths.add_singles_to_folder else parent
+            
+            c = config.filepaths
+            formatter = c.track_format
+            track_path = meta.format_track_path(formatter)
+            
+            # Eliminar featuring duplicado
+            match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
+            if match:
+                feat_artist = match.group(1)
+                if feat_artist.lower() in meta.artist.lower():
+                    track_path = track_path.replace(match.group(0), "")
+
+            if meta.info.explicit and "explicit" not in track_path.lower():
+                track_path += " [Explicit]"
+
+            track_path = clean_filename(track_path, restrict=c.restrict_characters)
+            if c.truncate_to > 0 and len(track_path) > c.truncate_to:
+                track_path = track_path[: c.truncate_to]
+
+            # Obtener downloadable para extensión
+            downloadable = await self.client.get_downloadable(self.id, quality)
+            file_path = os.path.join(folder, f"{track_path}.{downloadable.extension}")
+            
+            if os.path.isfile(file_path):
+                logger.info(f"[✓] Single already exists and registered: {os.path.basename(file_path)}")
+                return None
+            else:
+                logger.warning(f"[!] Single in database but file missing. Re-downloading: {os.path.basename(file_path)}")
+                # Continuar para re-descargar
+                os.makedirs(folder, exist_ok=True)
+                embedded_cover_path = await self._download_cover(album.covers, folder)
+                return Track(meta, downloadable, self.config, folder, embedded_cover_path, self.db, is_single=True)
+        
+        # NO está en DB - descarga normal
         try:
             resp = await self.client.get_metadata(self.id, "track")
         except NonStreamableError as e:
