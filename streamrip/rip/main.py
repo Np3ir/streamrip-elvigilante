@@ -38,7 +38,7 @@ class Main:
     def __init__(self, config: Config):
         self.config = config
 
-        # --- BRUTE FORCE: LOAD CONFIG.TOML FROM APPDATA ---
+        # Load config.toml from APPDATA to override defaults
         try:
             appdata = os.environ.get("APPDATA")
             manual_config_path = os.path.join(appdata, "streamrip", "config.toml")
@@ -52,19 +52,19 @@ class Main:
                 with open(manual_config_path, "rb") as f:
                     data = tomllib.load(f)
 
-                # 1. Force Download Folder
+                # 1. Override download folder
                 if "downloads" in data and "folder" in data["downloads"]:
                     target_folder = data["downloads"]["folder"]
                     self.config.session.downloads.folder = target_folder
 
-                # 2. Force Folder Format
+                # 2. Override folder and track formats
                 if "filepaths" in data:
                     if "folder_format" in data["filepaths"]:
                         self.config.session.filepaths.folder_format = data["filepaths"]["folder_format"]
                     if "track_format" in data["filepaths"]:
                         self.config.session.filepaths.track_format = data["filepaths"]["track_format"]
 
-                # 3. Read Database Paths
+                # 3. Read database paths from config
                 if "database" in data:
                     if "downloads_path" in data["database"]:
                         db_path = data["database"]["downloads_path"]
@@ -74,11 +74,12 @@ class Main:
                 os.makedirs(target_folder, exist_ok=True)
 
         except Exception as e:
+            # Fall back to defaults if config loading fails
             target_folder = config.session.downloads.folder
             db_path = os.path.join(target_folder, "downloads.db")
             failed_db_path = os.path.join(target_folder, "failed_downloads.db")
 
-        # Initialize Clients
+        # Initialize streaming service clients
         self.clients: dict[str, Client] = {
             "qobuz": QobuzClient(config),
             "tidal": TidalClient(config),
@@ -86,20 +87,21 @@ class Main:
             "soundcloud": SoundcloudClient(config),
         }
 
-        # Initialize Database with correct paths
+        # Initialize database with configured paths
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         os.makedirs(os.path.dirname(failed_db_path), exist_ok=True)
 
         downloads_db = db.Downloads(db_path)
         failed_downloads_db = db.Failed(failed_db_path)
         self.database = db.Database(downloads_db, failed_downloads_db)
-        # -----------------------------------------------------------
 
+        # Queue for managing pending downloads
         self.queue = asyncio.Queue()
         self.producer_tasks = []
 
     async def add(self, url: str):
-        # Background streaming for Tidal artists
+        """Add a URL to the download queue"""
+        # Special handling for Tidal artist URLs (streaming mode)
         tidal_artist_match = re.search(r'tidal\.com.*/artist/(\d+)', url)
 
         if tidal_artist_match:
@@ -108,29 +110,31 @@ class Main:
             self.producer_tasks.append(task)
             return
 
+        # Parse and queue standard URLs
         parsed = parse_url(url)
-        if parsed is None: raise Exception(f"Unable to parse url {url}")
+        if parsed is None:
+            raise Exception(f"Unable to parse url {url}")
         client = await self.get_logged_in_client(parsed.source)
         item = await parsed.into_pending(client, self.config, self.database)
         await self.queue.put(item)
 
     async def _background_search_artist(self, artist_id):
+        """Stream all albums from a Tidal artist in the background"""
         try:
             client = await self.get_logged_in_client("tidal")
 
-            # --- NEW: Fetch Artist Name for better UI ---
+            # Fetch artist name for better UI display
             display_name = artist_id
             try:
-                # Fetch metadata just to get the name
                 artist_meta = await client.get_metadata(artist_id, "artist")
                 if "name" in artist_meta:
                     display_name = artist_meta["name"]
             except:
                 pass  # Use ID if name fetch fails
-            # ---------------------------------------------
 
             console.print(f"[green]Streaming started: Searching releases for {display_name}...[/green]")
 
+            # Stream albums in batches and queue them
             async for album_batch in client.get_artist_albums_stream(artist_id):
                 count = 0
                 for album in album_batch:
@@ -143,6 +147,7 @@ class Main:
             logger.error(f"Error in background search: {e}")
 
     async def add_by_id(self, source: str, media_type: str, id: str):
+        """Add a media item by source, type, and ID"""
         client = await self.get_logged_in_client(source)
         if media_type == "track":
             item = PendingSingle(id, client, self.config, self.database)
@@ -155,10 +160,11 @@ class Main:
         elif media_type == "artist":
             item = PendingArtist(id, client, self.config, self.database)
         else:
-            raise Exception(media_type)
+            raise Exception(f"Unknown media type: {media_type}")
         await self.queue.put(item)
 
     async def add_all(self, urls: list[str]):
+        """Add multiple URLs to the queue"""
         for url in urls:
             try:
                 await self.add(url)
@@ -166,16 +172,27 @@ class Main:
                 console.print(f"[red]Error adding {url}: {e}[/red]")
 
     async def resolve(self):
+        """Placeholder for future resolve logic"""
         pass
 
     async def rip(self):
+        """Start the download workers and process the queue"""
+        # Create 4 concurrent workers
         workers = [asyncio.create_task(self.worker_loop()) for _ in range(4)]
+        
+        # Wait for all producer tasks to complete
         if self.producer_tasks:
             await asyncio.gather(*self.producer_tasks)
+        
+        # Wait for queue to be fully processed
         await self.queue.join()
-        for w in workers: w.cancel()
+        
+        # Cancel workers
+        for w in workers:
+            w.cancel()
 
     async def worker_loop(self):
+        """Worker that processes items from the queue"""
         while True:
             pending_item = await self.queue.get()
             try:
@@ -188,8 +205,10 @@ class Main:
                 self.queue.task_done()
 
     async def get_logged_in_client(self, source: str):
+        """Get a logged-in client for the specified source"""
         client = self.clients.get(source)
-        if client is None: raise Exception(f"No client named {source}")
+        if client is None:
+            raise Exception(f"No client named {source}")
         if not client.logged_in:
             prompter = get_prompter(client, self.config)
             if not prompter.has_creds():
@@ -203,8 +222,13 @@ class Main:
         return self
 
     async def __aexit__(self, *_):
+        """Cleanup resources on exit"""
+        # Close all client sessions
         for client in self.clients.values():
-            if hasattr(client, "session"): await client.session.close()
+            if hasattr(client, "session"):
+                await client.session.close()
+        
+        # Close database connections
         try:
             if hasattr(self.database, "downloads") and hasattr(self.database.downloads, "close"):
                 self.database.downloads.close()
@@ -212,10 +236,13 @@ class Main:
                 self.database.failed.close()
         except Exception:
             pass
+        
+        # Clean up temporary artwork directories
         remove_artwork_tempdirs()
 
 
 def run_main():
+    """Entry point for the CLI"""
     async def main():
         config = Config()
         async with Main(config) as ripper:

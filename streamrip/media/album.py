@@ -39,6 +39,7 @@ class Album(Media):
                     return
                 await track.rip()
             except Exception as e:
+                # Check if Python is shutting down
                 if sys.meta_path is not None:
                     logger.error(f"Error downloading track: {e}")
                 else:
@@ -49,13 +50,11 @@ class Album(Media):
             return_exceptions=True
         )
 
+        # Process any exceptions from the batch
         for result in results:
             if isinstance(result, Exception):
-                try:
-                    if sys.meta_path is not None:
-                        logger.error(f"Album track processing error: {result}")
-                except Exception:
-                    pass
+                if sys.meta_path is not None:
+                    logger.error(f"Album track processing error: {result}")
                 else:
                     print(f"[ERROR] Album track processing error (shutdown): {result}")
 
@@ -95,6 +94,8 @@ class PendingAlbum(Pending):
         folder = self.config.session.downloads.folder
         album_folder = self._album_folder(folder, meta)
         os.makedirs(album_folder, exist_ok=True)
+        
+        # Download album artwork
         embed_cover, _ = await download_artwork(
             self.client.session,
             album_folder,
@@ -102,6 +103,8 @@ class PendingAlbum(Pending):
             self.config.session.artwork,
             for_playlist=False,
         )
+        
+        # Create pending tracks for all tracks in album
         pending_tracks = [
             PendingTrack(
                 id,
@@ -118,6 +121,7 @@ class PendingAlbum(Pending):
         return Album(meta, pending_tracks, self.config, album_folder, self.db)
 
     def _album_folder(self, parent: str, meta: AlbumMetadata) -> str:
+        """Build the album folder path based on config"""
         config = self.config.session
         if config.downloads.source_subdirectories:
             parent = os.path.join(parent, self.client.source.capitalize())

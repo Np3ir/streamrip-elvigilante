@@ -16,7 +16,8 @@ from ..config import Config
 from ..console import console
 from ..db import Database
 from ..exceptions import NonStreamableError
-from ..filepath_utils import clean_filepath
+# Use clean_filename to respect special characters and clean_filepath for safe paths
+from ..filepath_utils import clean_filepath, clean_filename
 from ..metadata import (
     AlbumMetadata,
     Covers,
@@ -43,9 +44,7 @@ class PendingPlaylistTrack(Pending):
     db: Database
 
     async def resolve(self) -> Track | None:
-        if self.db.downloaded(self.id):
-            logger.info(f"Track ({self.id}) already logged in database. Skipping.")
-            return None
+        # Get track metadata first to build the path
         try:
             resp = await self.client.get_metadata(self.id, "track")
         except NonStreamableError as e:
@@ -59,6 +58,7 @@ class PendingPlaylistTrack(Pending):
             )
             self.db.set_failed(self.client.source, "track", self.id)
             return None
+        
         meta = TrackMetadata.from_resp(album, self.client.source, resp)
         if meta is None:
             logger.error(
@@ -67,12 +67,58 @@ class PendingPlaylistTrack(Pending):
             self.db.set_failed(self.client.source, "track", self.id)
             return None
 
+        # Apply playlist-specific metadata
         c = self.config.session.metadata
         if c.renumber_playlist_tracks:
             meta.tracknumber = self.position
         if c.set_playlist_to_album:
             album.album = self.playlist_name
 
+        # Build expected file path to check existence
+        formatter = self.config.session.filepaths.track_format
+        track_path = meta.format_track_path(formatter)
+        
+        # Clean duplicate featuring tags
+        match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
+        if match:
+            feat_artist = match.group(1)
+            if feat_artist.lower() in meta.artist.lower():
+                track_path = track_path.replace(match.group(0), "")
+        
+        if meta.info.explicit and "explicit" not in track_path.lower():
+            track_path += " [Explicit]"
+        
+        track_path = clean_filename(track_path, restrict=self.config.session.filepaths.restrict_characters)
+        
+        if self.config.session.filepaths.truncate_to > 0:
+            track_path = track_path[:self.config.session.filepaths.truncate_to]
+        
+        # Try multiple common extensions
+        expected_paths = [
+            os.path.join(self.folder, f"{track_path}.flac"),
+            os.path.join(self.folder, f"{track_path}.m4a"),
+            os.path.join(self.folder, f"{track_path}.mp3"),
+        ]
+        
+        file_exists = any(os.path.isfile(path) for path in expected_paths)
+        
+        # Check if already downloaded (DB + file existence)
+        if self.db.downloaded(self.id):
+            if file_exists:
+                # File exists and in DB - skip
+                progress.print_skipped(f"{meta.artist} - {meta.title}", "already downloaded")
+                return None
+            else:
+                # In DB but file missing - re-download
+                progress.print_skipped(f"{meta.artist} - {meta.title}", "in DB but file missing, re-downloading")
+                # Continue to download below
+        elif file_exists:
+            # File exists but not in DB - register it
+            progress.print_skipped(f"{meta.artist} - {meta.title}", "registering in DB")
+            self.db.set_downloaded(self.id)
+            return None
+
+        # Get downloadable info
         quality = self.config.session.get_source(self.client.source).quality
         try:
             embedded_cover_path, downloadable = await asyncio.gather(
@@ -84,6 +130,8 @@ class PendingPlaylistTrack(Pending):
             self.db.set_failed(self.client.source, "track", self.id)
             return None
 
+        # Track is created using modified track.py
+        # Therefore, featuring cleanup happens automatically
         return Track(
             meta,
             downloadable,
@@ -170,8 +218,16 @@ class PendingPlaylist(Pending):
             logger.error(f"Error creating playlist: {e}")
             return None
         name = meta.name
-        parent = self.config.session.downloads.folder
-        folder = os.path.join(parent, clean_filepath(name))
+        
+        # Folder configuration
+        parent = "E:\\"
+        
+        # Use clean_filename to allow special characters if config permits
+        restrict_chars = self.config.session.filepaths.restrict_characters
+        safe_name = clean_filename(name, restrict=restrict_chars)
+        
+        folder = os.path.join(parent, safe_name)
+        
         tracks = [
             PendingPlaylistTrack(
                 id,
@@ -243,7 +299,11 @@ class PendingLastfmPlaylist(Pending):
             results: list[tuple[str | None, bool]] = await asyncio.gather(*requests)
 
         parent = self.config.session.downloads.folder
-        folder = os.path.join(parent, clean_filepath(playlist_title))
+        
+        # Special character support for Last.fm
+        restrict_chars = self.config.session.filepaths.restrict_characters
+        safe_title = clean_filename(playlist_title, restrict=restrict_chars)
+        folder = os.path.join(parent, safe_title)
 
         pending_tracks = []
         for pos, (id, from_fallback) in enumerate(results, start=1):
@@ -331,13 +391,6 @@ class PendingLastfmPlaylist(Pending):
     ) -> tuple[str, list[tuple[str, str]]]:
         """From a last.fm url, return the playlist title, and a list of
         track titles and artist names.
-
-        Each page contains 50 results, so `num_tracks // 50 + 1` requests
-        are sent per playlist.
-
-        :param url:
-        :type url: str
-        :rtype: tuple[str, list[tuple[str, str]]]
         """
         logger.debug("Fetching lastfm playlist")
 
@@ -349,7 +402,7 @@ class PendingLastfmPlaylist(Pending):
 
         def find_title_artist_pairs(page_text):
             info: list[tuple[str, str]] = []
-            titles = title_tags.findall(page_text)  # [2:]
+            titles = title_tags.findall(page_text)
             for i in range(0, len(titles) - 1, 2):
                 info.append((html.unescape(titles[i]), html.unescape(titles[i + 1])))
             return info

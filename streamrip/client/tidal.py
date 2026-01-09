@@ -52,15 +52,15 @@ class TidalClient(Client):
         self.config = config.session.tidal
 
         # --- FIX: COMPATIBILIDAD NATIVA ---
-        # Usamos el método original de la clase padre para crear el limitador.
+        # Usamos el mÃ©todo original de la clase padre para crear el limitador.
         # Ponemos 100 (muy alto) para que no frene nada; el freno real
-        # lo ponemos nosotros abajo con el Semaphore y la lógica 429.
+        # lo ponemos nosotros abajo con el Semaphore y la lÃ³gica 429.
         self.rate_limiter = self.get_rate_limiter(100)
 
-        # Semáforo para controlar concurrencia real (5 descargas a la vez)
+        # SemÃ¡foro para controlar concurrencia real (5 descargas a la vez)
         self.semaphore = asyncio.Semaphore(5)
 
-        # Candado para renovación de token
+        # Candado para renovaciÃ³n de token
         self.auth_lock = asyncio.Lock()
 
     def _log(self, message: str):
@@ -168,7 +168,32 @@ class TidalClient(Client):
         elif "dateAdded" in item:
             item["date"] = item["dateAdded"]
 
-        if media_type in ("playlist", "album"):
+        # --- VALIDATION AND FALLBACK FOR TRACK METADATA ---
+        if media_type == "track":
+            # Validate title field
+            if "title" not in item or not item.get("title"):
+                logger.warning(f"❌ Track {item_id}: 'title' field missing or empty")
+                logger.debug(f"Track response keys: {list(item.keys())}")
+                # Use track number as fallback
+                item["title"] = f"Track {item.get('trackNumber', '?')}"
+                logger.info(f"Using fallback title: {item['title']}")
+            
+            # Validate artists field
+            if "artists" not in item or not item.get("artists"):
+                logger.warning(f"❌ Track {item_id}: 'artists' field missing or empty")
+                # Try alternative artist fields
+                if "artist" in item and isinstance(item["artist"], dict):
+                    item["artists"] = [item["artist"]]
+                    logger.info(f"Using 'artist' field as fallback: {item['artist'].get('name', 'Unknown')}")
+                else:
+                    item["artists"] = [{"name": "Unknown Artist"}]
+                    logger.warning(f"No artist information available for track {item_id}")
+            
+            # Ensure lyrics field exists (even if empty)
+            if "lyrics" not in item:
+                item["lyrics"] = ""
+
+        elif media_type in ("playlist", "album"):
             endpoint = f"{url}/items"
             params = {'limit': 100}
             if media_type == "album": params['includeContributors'] = 'true'
@@ -179,6 +204,15 @@ class TidalClient(Client):
             for t in fetched_items:
                 target = t.get("item", t)
                 target["lyrics"] = ""
+                # Validate each track in the album/playlist
+                if "title" not in target or not target.get("title"):
+                    target["title"] = f"Track {target.get('trackNumber', '?')}"
+                    logger.warning(f"Track in {media_type} {item_id} missing title, using fallback")
+                if "artists" not in target or not target.get("artists"):
+                    if "artist" in target:
+                        target["artists"] = [target["artist"]]
+                    else:
+                        target["artists"] = [{"name": "Unknown Artist"}]
                 clean_tracks.append(target)
             item["tracks"] = clean_tracks
 
