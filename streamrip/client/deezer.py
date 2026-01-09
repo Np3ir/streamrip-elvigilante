@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import logging
 
+import aiohttp  # ← AGREGADO: Importar aiohttp
 import deezer
 from Cryptodome.Cipher import AES
 
@@ -13,6 +14,7 @@ from ..exceptions import (
     NonStreamableError,
 )
 from .client import Client
+from ..utils.ssl_utils import get_aiohttp_connector_kwargs  # ← AGREGADO
 from .downloadable import DeezerDownloadable
 
 logger = logging.getLogger("streamrip")
@@ -41,10 +43,32 @@ class DeezerClient(Client):
         self.config = config.session.deezer
 
     async def login(self):
-        # Used for track downloads
-        self.session = await self.get_session(
-            verify_ssl=self.global_config.session.downloads.verify_ssl
+        # ================================================================
+        # FIX: Crear connector con pool aumentado ANTES de la sesión
+        # ================================================================
+        verify_ssl = self.global_config.session.downloads.verify_ssl
+        
+        # Obtener kwargs para connector (maneja SSL)
+        connector_kwargs = get_aiohttp_connector_kwargs(verify_ssl=verify_ssl)
+        
+        # AGREGAR límites de conexión aumentados
+        connector_kwargs['limit'] = 100              # Total: 10 → 100
+        connector_kwargs['limit_per_host'] = 50      # Por host: 10 → 50
+        connector_kwargs['force_close'] = False      # Reutilizar conexiones
+        connector_kwargs['enable_cleanup_closed'] = True  # Limpieza automática
+        
+        # Crear connector con los kwargs mejorados
+        connector = aiohttp.TCPConnector(**connector_kwargs)
+        
+        # Crear sesión con el connector mejorado
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         )
+        # ================================================================
+        # FIN DEL FIX
+        # ================================================================
+        
         arl = self.config.arl
         if not arl:
             raise MissingCredentialsError
