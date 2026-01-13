@@ -51,16 +51,16 @@ class TidalClient(Client):
         self.global_config = config
         self.config = config.session.tidal
 
-        # --- FIX: COMPATIBILIDAD NATIVA ---
-        # Usamos el mÃ©todo original de la clase padre para crear el limitador.
-        # Ponemos 100 (muy alto) para que no frene nada; el freno real
-        # lo ponemos nosotros abajo con el Semaphore y la lÃ³gica 429.
+        # --- FIX: NATIVE COMPATIBILITY ---
+        # We use the original method from the parent class to create the limiter.
+        # We set it to 100 (very high) so it doesn't throttle anything; the real 
+        # throttling is handled below with the Semaphore and 429 logic.
         self.rate_limiter = self.get_rate_limiter(100)
 
-        # SemÃ¡foro para controlar concurrencia real (5 descargas a la vez)
+        # Semaphore to control real concurrency (5 simultaneous downloads)
         self.semaphore = asyncio.Semaphore(5)
 
-        # Candado para renovaciÃ³n de token
+        # Lock for token renewal
         self.auth_lock = asyncio.Lock()
 
     def _log(self, message: str):
@@ -69,9 +69,9 @@ class TidalClient(Client):
 
     async def login(self):
         jar = CookieJar(unsafe=True)
-        # Connector robusto
+        # Robust connector
         connector = TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
-        # Timeouts generosos
+        # Generous timeouts
         timeout = ClientTimeout(total=3600, connect=30, sock_read=60)
 
         self.session = ClientSession(
@@ -363,7 +363,7 @@ class TidalClient(Client):
                 url = path if path.startswith("http") else f"{base}/{path}"
 
                 try:
-                    async with self.session.get(url, params=params) as resp:
+                    async with self.session.get(url, params=params, timeout=ClientTimeout(total=30)) as resp:
                         # --- 1. SMART AUTO-REGULATION (Backoff) ---
                         if resp.status == 429:
                             retry_after = resp.headers.get("Retry-After")
@@ -381,7 +381,7 @@ class TidalClient(Client):
                         # --- 2. AUTHENTICATION REFRESH ---
                         if resp.status == 401:
                             if attempt < 2:
-                                logger.warning("Token expired (401). refreshing...")
+                                logger.warning("Token expired (401). Refreshing...")
                                 await asyncio.sleep(1)
                                 await self._refresh_access_token()
                                 continue
@@ -398,7 +398,7 @@ class TidalClient(Client):
                         except:
                             return json.loads(await resp.text())
 
-                except aiohttp.ClientOSError:
+                except (aiohttp.ClientOSError, asyncio.TimeoutError):
                     await asyncio.sleep(1)
                     continue
                 except Exception as e:

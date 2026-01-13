@@ -1,254 +1,269 @@
 import logging
-import sys
-import os
-from dataclasses import dataclass
-from typing import Callable
 import threading
-import queue
 import time
+from dataclasses import dataclass
+from typing import Callable, Dict, Optional
 
-# Enable ANSI colors on Windows consoles
-os.system("")
-
-from rich.console import Console, Group
+from rich.console import Group
 from rich.live import Live
 from rich.progress import (
     BarColumn,
     Progress,
+    TaskProgressColumn,
     TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
 )
 from rich.rule import Rule
 from rich.text import Text
 
+from .console import console
+
 logger = logging.getLogger("streamrip")
 
-_console = Console(file=sys.stderr, force_terminal=True, force_interactive=True)
+
+class _MissingFileWarningFilter(logging.Filter):
+    """
+    Captures + suppresses the noisy warning:
+      "Track in database but file missing. Re-downloading: ..."
+    so it doesn't spam the console while Live is running.
+
+    It also forwards a clean deduped message into ProgressManager.
+    """
+
+    def __init__(self, pm: "ProgressManager"):
+        super().__init__()
+        self.pm = pm
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if record.levelno < logging.WARNING:
+                return True
+
+            msg = record.getMessage() or ""
+            if "Track in database but file missing" in msg:
+                # Clean it up (keep it short + useful)
+                clean = "Track in DB but file missing — re-downloading"
+                self.pm.add_warning(clean)
+                return False  # suppress printing
+        except Exception:
+            # If anything goes wrong, do not break logging
+            return True
+
+        return True
 
 
 class ProgressManager:
     """
-    Progress manager con auto-eliminación de barras completadas.
+    Clean + compatible UI (works on older Rich too):
+    - Manual truncation (no overflow/no_wrap args)
+    - Header + bars in one Live
+    - Throttled updates to reduce flicker
+    - Deduped warning summary shown above progress bars
+    - Suppresses the specific noisy warning via logging.Filter (progress.py only)
     """
 
     def __init__(self):
+        self._lock = threading.Lock()
         self.started = False
+
         self.task_titles: list[str] = []
-        
-        # Contadores de sesión
-        self.completed_count = 0
-        self.skipped_count = 0
-        self.error_count = 0
 
+        # warning_cache: message -> count
+        self.warning_cache: Dict[str, int] = {}
+        self._warning_last_update = 0.0
+        self._warning_refresh_interval = 0.25  # reduce re-render spam
+
+        # Use ONLY ProgressColumn objects here
         self.progress = Progress(
-            TextColumn("[cyan]{task.description}"),
+            TextColumn("{task.description}"),
             BarColumn(bar_width=None),
-            console=_console,
+            TaskProgressColumn(text_format="{task.percentage:>3.0f}%"),
+            TextColumn("•", style="dim"),
+            TransferSpeedColumn(),
+            TextColumn("•", style="dim"),
+            TimeRemainingColumn(),
+            console=console,
         )
 
-        self.prefix = Text.assemble(("Downloading ", "bold cyan"), overflow="ellipsis")
-        self._text_cache = self.gen_title_text()
+        # Header prefix (minimal color)
+        self.prefix = Text.assemble(("Downloading ", "bold cyan"))
+
         self.live = Live(
-            Group(self._text_cache, self.progress),
-            console=_console,
-            refresh_per_second=8
+            self._renderable(),
+            console=console,
+            refresh_per_second=10,
+            transient=True,
+            auto_refresh=True,
         )
-        
-        # Thread-safety
-        self._lock = threading.RLock()
-        self._live_lock = threading.Lock()
-        
-        # Queue para updates no-bloqueantes
-        self._update_queue = queue.Queue(maxsize=1000)
-        self._stop_worker = threading.Event()
-        
-        # Worker thread
-        self._worker_thread = None
-        
-        # Fallback mode
-        self._use_fallback = False
-        self._live_failures = 0
+
+        # Throttle per task to reduce heavy redraw spam
+        self._last_task_update: dict[int, float] = {}
+        self._min_update_interval = 0.04  # seconds
+
+        # Install filter to suppress the noisy warning from anywhere in streamrip
+        self._install_warning_filter()
+
+    # ---------- logging filter installation ----------
+
+    def _install_warning_filter(self):
+        try:
+            target_logger = logging.getLogger("streamrip")
+            # Avoid double-install if module reloaded
+            for f in list(getattr(target_logger, "filters", [])):
+                if isinstance(f, _MissingFileWarningFilter):
+                    return
+            target_logger.addFilter(_MissingFileWarningFilter(self))
+        except Exception as e:
+            logger.debug(f"Failed to install warning filter: {e}")
+
+    # ---------- helpers ----------
+
+    def _truncate(self, text: str, max_len: int) -> str:
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 3] + "..."
+
+    def _renderable(self):
+        blocks = []
+
+        rule = self._gen_title_rule()
+        if rule is not None:
+            blocks.append(rule)
+
+        warn_block = self._gen_warning_block()
+        if warn_block is not None:
+            blocks.append(warn_block)
+
+        blocks.append(self.progress)
+        return Group(*blocks)
+
+    def _update_live(self, force: bool = False):
+        try:
+            if self.started:
+                self.live.update(self._renderable(), refresh=force)
+        except Exception as e:
+            logger.debug(f"Live update failed: {e}")
+
+    # ---------- warnings UI ----------
+
+    def add_warning(self, message: str):
+        """
+        Dedup + count warnings and show a short summary above progress bars.
+        Safe to call even before Live starts.
+        """
+        message = self._truncate((message or "").strip() or "Warning", 78)
+
+        with self._lock:
+            self.warning_cache[message] = self.warning_cache.get(message, 0) + 1
+
+        now = time.monotonic()
+        # Throttle UI refresh
+        if now - self._warning_last_update >= self._warning_refresh_interval:
+            self._warning_last_update = now
+            self._update_live(force=False)
+
+    def _gen_warning_block(self) -> Optional[Group]:
+        if not self.warning_cache:
+            return None
+
+        # Show up to 2 lines to keep UI clean
+        items = list(self.warning_cache.items())
+        shown = items[:2]
+        more = len(items) - len(shown)
+
+        lines = []
+        for msg, count in shown:
+            suffix = f" (x{count})" if count > 1 else ""
+            lines.append(Text(f"⚠ {msg}{suffix}", style="yellow"))
+
+        if more > 0:
+            lines.append(Text(f"⚠ {more} more warning(s) hidden…", style="dim yellow"))
+
+        return Group(*lines)
+
+    # ---------- public API ----------
 
     def get_callback(self, total: int, desc: str):
-        if not self.started:
-            try:
-                self.live.start()
-                self.started = True
-                
-                # Iniciar worker thread
-                if self._worker_thread is None:
-                    self._worker_thread = threading.Thread(
-                        target=self._update_worker_loop,
-                        daemon=True
-                    )
-                    self._worker_thread.start()
-            except Exception:
-                self._use_fallback = True
+        desc = self._truncate((desc or "").strip() or "Downloading...", 52)
 
-        if self._use_fallback:
-            return Handle(lambda _: None, lambda: None)
+        with self._lock:
+            if not self.started:
+                try:
+                    self.live.update(self._renderable(), refresh=True)
+                    self.live.start()
+                    self.started = True
+                except Exception as e:
+                    logger.debug(f"Failed to start Live: {e}")
 
-        task_id = self.progress.add_task(f"[cyan]{desc}", total=total)
+        task = self.progress.add_task(desc, total=total)
 
         def _callback_update(x: int):
-            if self._use_fallback:
-                return
             try:
-                self._update_queue.put_nowait({
-                    "type": "advance",
-                    "task_id": task_id,
-                    "advance": x
-                })
-            except queue.Full:
-                pass
+                now = time.monotonic()
+                last = self._last_task_update.get(task, 0.0)
+                if now - last < self._min_update_interval:
+                    return
+                self._last_task_update[task] = now
+
+                self.progress.update(task, advance=x)
+            except Exception as e:
+                logger.debug(f"Progress update failed: {e}")
 
         def _callback_done():
-            if self._use_fallback:
-                return
             try:
-                # ================================================================
-                # FIX: Marcar como completado y OCULTAR la barra
-                # ================================================================
-                self._update_queue.put_nowait({
-                    "type": "complete",
-                    "task_id": task_id
-                })
-                self.completed_count += 1
-            except queue.Full:
-                pass
+                self.progress.remove_task(task)
+                self._last_task_update.pop(task, None)
+            except Exception as e:
+                logger.debug(f"Progress cleanup failed: {e}")
 
         return Handle(_callback_update, _callback_done)
 
-    def _update_worker_loop(self):
-        """Worker thread que procesa updates en background."""
-        batch_updates = []
-        last_live_update = time.time()
-        min_interval = 0.15
-        
-        while not self._stop_worker.is_set():
-            try:
-                # Recolectar hasta 5 updates
-                timeout = max(0.01, min_interval - (time.time() - last_live_update))
-                update = self._update_queue.get(timeout=timeout)
-                batch_updates.append(update)
-                
-                # Recolectar más si hay disponibles
-                while len(batch_updates) < 5:
-                    try:
-                        update = self._update_queue.get_nowait()
-                        batch_updates.append(update)
-                    except queue.Empty:
-                        break
-                
-                # Procesar batch
-                if batch_updates:
-                    with self._lock:
-                        for upd in batch_updates:
-                            try:
-                                if upd["type"] == "advance":
-                                    self.progress.update(
-                                        upd["task_id"],
-                                        advance=upd["advance"]
-                                    )
-                                elif upd["type"] == "complete":
-                                    # ================================================
-                                    # FIX: Ocultar barra al completar
-                                    # ================================================
-                                    self.progress.update(
-                                        upd["task_id"],
-                                        visible=False
-                                    )
-                                    # También remover la tarea para liberar memoria
-                                    try:
-                                        self.progress.remove_task(upd["task_id"])
-                                    except:
-                                        pass
-                            except Exception as e:
-                                logger.debug(f"Progress update error: {e}")
-                    
-                    batch_updates.clear()
-                    
-                    # Update Live display
-                    now = time.time()
-                    if now - last_live_update >= min_interval:
-                        self._safe_live_update()
-                        last_live_update = now
-                        
-            except queue.Empty:
-                # Timeout - update display si hay cambios pendientes
-                if time.time() - last_live_update >= min_interval:
-                    self._safe_live_update()
-                    last_live_update = time.time()
-            except Exception as e:
-                logger.debug(f"Worker loop error: {e}")
-
-    def _safe_live_update(self):
-        """Update Live con manejo de errores."""
-        if self._use_fallback:
-            return
-            
-        try:
-            with self._live_lock:
-                self.live.update(Group(self.get_title_text(), self.progress))
-        except Exception as e:
-            self._live_failures += 1
-            logger.debug(f"Live update error: {e}")
-            
-            if self._live_failures >= 3:
-                logger.warning("Rich Live failing, switching to fallback mode")
-                self._use_fallback = True
-
     def cleanup(self):
-        """Cleanup y mostrar resumen final."""
-        self._stop_worker.set()
-        
-        if self._worker_thread and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=2)
-        
-        if self.started and not self._use_fallback:
-            try:
-                self.live.stop()
-            except Exception:
-                pass
-        
-        # Mostrar resumen final
-        if self.completed_count > 0 or self.skipped_count > 0 or self.error_count > 0:
-            summary = Text()
-            summary.append("✓ Completed: ", style="bold green")
-            summary.append(str(self.completed_count), style="green")
-            summary.append("  ⊘ Skipped: ", style="bold yellow")
-            summary.append(str(self.skipped_count), style="yellow")
-            summary.append("  ✖ Errors: ", style="bold red")
-            summary.append(str(self.error_count), style="red")
-            _console.print(summary)
+        with self._lock:
+            if self.started:
+                try:
+                    self.live.stop()
+                except Exception as e:
+                    logger.debug(f"Failed to stop Live: {e}")
+                finally:
+                    self.started = False
+                    self._last_task_update.clear()
+                    # keep warning_cache? usually yes, but cleanup should reset UI
+                    self.warning_cache.clear()
 
     def add_title(self, title: str):
         title = (title or "").strip()
-        if title:
-            with self._lock:
+        if not title:
+            return
+
+        with self._lock:
+            if title not in self.task_titles:
                 self.task_titles.append(title)
-                self._text_cache = self.gen_title_text()
+
+        self._update_live()
 
     def remove_title(self, title: str):
         title = (title or "").strip()
-        if title:
-            with self._lock:
-                if title in self.task_titles:
-                    self.task_titles.remove(title)
-                    self._text_cache = self.gen_title_text()
+        if not title:
+            return
 
-    def gen_title_text(self) -> Rule:
-        titles = ", ".join(self.task_titles[:3])
-        if len(self.task_titles) > 3:
-            titles += "..."
-        
-        # Agregar contadores al título
-        stats = f" • ✓ {self.completed_count} ⊘ {self.skipped_count} ✖ {self.error_count}"
-        t = self.prefix + Text(titles) + Text(stats, style="dim")
-        return Rule(t)
-
-    def get_title_text(self) -> Rule:
         with self._lock:
-            return self.gen_title_text()
+            if title in self.task_titles:
+                self.task_titles.remove(title)
+
+        self._update_live()
+
+    def _gen_title_rule(self):
+        if not self.task_titles:
+            return None
+
+        shown = [self._truncate(t, 34) for t in self.task_titles[:2]]
+        titles = ", ".join(shown)
+        if len(self.task_titles) > 2:
+            titles += "..."
+
+        return Rule(self.prefix + Text(titles))
 
 
 @dataclass(slots=True)
@@ -263,27 +278,24 @@ class Handle:
         self.done()
 
 
-# Global instance
+# -------- global API --------
+
 _p = ProgressManager()
 
 
 def get_progress_callback(enabled: bool, total: int, desc: str) -> Handle:
-    global _p
     if not enabled:
         return Handle(lambda _: None, lambda: None)
     return _p.get_callback(total, desc)
 
 
 def add_title(title: str):
-    global _p
     _p.add_title(title)
 
 
 def remove_title(title: str):
-    global _p
     _p.remove_title(title)
 
 
 def clear_progress():
-    global _p
     _p.cleanup()

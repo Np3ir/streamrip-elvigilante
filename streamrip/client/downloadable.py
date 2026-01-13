@@ -53,6 +53,7 @@ async def fast_async_download(path, url, headers, callback):
             headers=headers,
             allow_redirects=True,
             stream=True,
+            timeout=(10, 30),
         ) as resp:
             for chunk in resp.iter_content(chunk_size=chunk_size):
                 file.write(chunk)
@@ -142,7 +143,7 @@ class DeezerDownloadable(Downloadable):
 
     async def _download(self, path: str, callback):
         # with requests.Session().get(self.url, allow_redirects=True) as resp:
-        async with self.session.get(self.url, allow_redirects=True) as resp:
+        async with self.session.get(self.url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=60)) as resp:
             resp.raise_for_status()
             self._size = int(resp.headers.get("Content-Length", 0))
             if self._size < 20000 and not self.url.endswith(".jpg"):
@@ -336,7 +337,7 @@ class SoundcloudDownloadable(Downloadable):
 
     async def _download_mp3(self, path: str, callback):
         # TODO: make progress bar reflect bytes
-        async with self.session.get(self.url) as resp:
+        async with self.session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             content = await resp.text("utf-8")
 
         parsed_m3u = m3u8.loads(content)
@@ -355,7 +356,7 @@ class SoundcloudDownloadable(Downloadable):
 
     async def _download_segment(self, segment_uri: str) -> str:
         tmp = generate_temp_path(segment_uri)
-        async with self.session.get(segment_uri) as resp:
+        async with self.session.get(segment_uri, timeout=aiohttp.ClientTimeout(total=20)) as resp:
             resp.raise_for_status()
             async with aiofiles.open(tmp, "wb") as file:
                 content = await resp.content.read()
@@ -364,7 +365,7 @@ class SoundcloudDownloadable(Downloadable):
 
     async def size(self) -> int:
         if self.file_type == "mp3":
-            async with self.session.get(self.url) as resp:
+            async with self.session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 content = await resp.text("utf-8")
 
             parsed_m3u = m3u8.loads(content)

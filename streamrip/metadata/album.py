@@ -5,7 +5,7 @@ import re
 import os
 from dataclasses import dataclass
 from typing import Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 from ..filepath_utils import clean_filename, clean_filepath
 from .covers import Covers
@@ -65,8 +65,8 @@ class AlbumMetadata:
 
     def format_folder_path(self, formatter: str) -> str:
         none_str = "Unknown"
-        # Date correction for folders
-        release_date_clean = self.release_date.replace(":", "-").replace("/", "-")
+        # Date cleanup for folders (no shifting)
+        release_date_clean = (self.release_date or "").replace(":", "-").replace("/", "-")
 
         # --- INITIALS LOGIC (A-Z vs #) ---
         raw_artist = self.albumartist.strip()
@@ -80,12 +80,12 @@ class AlbumMetadata:
         if sort_name:
             initial = sort_name[0].upper()
 
-            # --- CORRECCIÓN EL VIGILANTE ---
-            # Treat Æ, Œ, Ø and other ligatures as SYMBOLS (#), not letters.
-            if initial in ['Æ', 'Œ', 'Ð', 'Þ', 'Ø']:
+            # --- EL VIGILANTE CORRECTION ---
+            # Treat Æ, Œ, Ð, Þ, Ø and other ligatures as SYMBOLS (#), not letters.
+            if initial in ["Æ", "Œ", "Ð", "Þ", "Ø"]:
                 initial = "#"
             # If NOT a Latin letter (A-Z or Standard Accents), goes to "#" folder
-            elif not re.match(r'^[A-Z\u00C0-\u00FF]$', initial):
+            elif not re.match(r"^[A-Z\u00C0-\u00FF]$", initial):
                 initial = "#"
         else:
             initial = "Unknown"
@@ -114,25 +114,33 @@ class AlbumMetadata:
 
             # Extra aliases for easier config
             "artist": artist_clean,
-            "album": album_clean
+            "album": album_clean,
         }
         return clean_filepath(formatter.format(**info))
 
     @staticmethod
     def correct_release_date(raw_date: str | None) -> tuple[str, str]:
-        """Corrects date by subtracting one day and returns (full_date, year)."""
+        """
+        Returns (YYYY-MM-DD, year) WITHOUT shifting days.
+
+        Accepts:
+          - 'YYYY-MM-DD'
+          - ISO timestamps like 'YYYY-MM-DDTHH:MM:SSZ' or 'YYYY-MM-DDTHH:MM:SS+00:00'
+        Strategy:
+          - Always take only the first 10 chars (calendar date) and parse that.
+          - Never apply timezone conversions or subtract days.
+        """
+        if not raw_date:
+            return "Unknown", "Unknown"
+
         try:
-            if raw_date:
-                # Adjustment: subtract 1 day from original date
-                dt = datetime.strptime(raw_date[:10], "%Y-%m-%d").date()
-                dt -= timedelta(days=1)
-                return str(dt), str(dt.year)
+            date_part = raw_date[:10]  # YYYY-MM-DD
+            dt = datetime.strptime(date_part, "%Y-%m-%d").date()
+            return dt.isoformat(), str(dt.year)
         except Exception as e:
             logger.warning(f"Invalid release_date: {raw_date} ({e})")
-
-        # Fallback if conversion fails
-        year = raw_date[:4] if raw_date else "Unknown"
-        return raw_date or "Unknown", year
+            year = raw_date[:4] if len(raw_date) >= 4 else "Unknown"
+            return raw_date, year
 
     @classmethod
     def from_qobuz(cls, resp: dict) -> AlbumMetadata:
@@ -154,7 +162,11 @@ class AlbumMetadata:
         label = typed(_label or "", str)
         description = typed(resp.get("description", ""), str)
         disctotal = typed(
-            max(track.get("media_number", 1) for track in safe_get(resp, "tracks", "items", default=[{}])) or 1,
+            max(
+                track.get("media_number", 1)
+                for track in safe_get(resp, "tracks", "items", default=[{}])
+            )
+            or 1,
             int,
         )
         explicit = typed(resp.get("parental_warning", False), bool)
@@ -176,18 +188,32 @@ class AlbumMetadata:
             booklets=booklets,
         )
         return AlbumMetadata(
-            info, album, albumartist, year, genre=genres, covers=cover_urls,
-            albumcomposer=albumcomposer, comment=None, compilation=None,
-            copyright=_copyright, date=release_date, description=description,
-            disctotal=disctotal, encoder=None, grouping=None, lyrics=None,
-            purchase_date=None, tracktotal=tracktotal, release_date=release_date,
+            info,
+            album,
+            albumartist,
+            year,
+            genre=genres,
+            covers=cover_urls,
+            albumcomposer=albumcomposer,
+            comment=None,
+            compilation=None,
+            copyright=_copyright,
+            date=release_date,
+            description=description,
+            disctotal=disctotal,
+            encoder=None,
+            grouping=None,
+            lyrics=None,
+            purchase_date=None,
+            tracktotal=tracktotal,
+            release_date=release_date,
         )
 
     @classmethod
     def from_tidal(cls, resp: dict) -> AlbumMetadata:
         """Parses standard Tidal album response."""
         album = resp.get("title", "Unknown Album")
-        # Date handling with correction (-1 day)
+        # Date handling (no shifting)
         raw_date = resp.get("releaseDate") or resp.get("streamStartDate")
         release_date, year = cls.correct_release_date(raw_date)
 
@@ -353,8 +379,10 @@ class AlbumMetadata:
         release_date, year = cls.correct_release_date(raw_date)
         copyright = resp.get("copyright", "")
         artists = resp.get("artists", [])
-        albumartist = ", ".join(a["name"] for a in artists) or album_resp.get("artist", {}).get("name",
-                                                                                                "Unknown Artist")
+        albumartist = (
+            ", ".join(a["name"] for a in artists)
+            or album_resp.get("artist", {}).get("name", "Unknown Artist")
+        )
         disctotal = resp.get("volumeNumber", 1)
         explicit = resp.get("explicit", False)
         tidal_quality = resp.get("audioQuality", "LOW")
@@ -397,21 +425,30 @@ class AlbumMetadata:
 
     @classmethod
     def from_album_resp(cls, resp: dict, source: str) -> AlbumMetadata | None:
-        if source == "qobuz": return cls.from_qobuz(resp)
-        if source == "tidal": return cls.from_tidal(resp)
-        if source == "soundcloud": return cls.from_soundcloud(resp)
-        if source == "deezer": return cls.from_deezer(resp)
+        if source == "qobuz":
+            return cls.from_qobuz(resp)
+        if source == "tidal":
+            return cls.from_tidal(resp)
+        if source == "soundcloud":
+            return cls.from_soundcloud(resp)
+        if source == "deezer":
+            return cls.from_deezer(resp)
         raise Exception("Invalid source")
 
     @classmethod
     def from_track_resp(cls, resp: dict, source: str) -> AlbumMetadata | None:
-        if not source: raise Exception("Invalid source: None or empty")
+        if not source:
+            raise Exception("Invalid source: None or empty")
         source = source.strip().lower()
-        if source == "qobuz": return cls.from_qobuz(resp["album"])
-        if source == "tidal": return cls.from_tidal_playlist_track_resp(resp)
-        if source == "soundcloud": return cls.from_soundcloud(resp)
+        if source == "qobuz":
+            return cls.from_qobuz(resp["album"])
+        if source == "tidal":
+            return cls.from_tidal_playlist_track_resp(resp)
+        if source == "soundcloud":
+            return cls.from_soundcloud(resp)
         if source == "deezer":
-            if "tracks" not in resp["album"]: return cls.from_incomplete_deezer_track_resp(resp)
+            if "tracks" not in resp["album"]:
+                return cls.from_incomplete_deezer_track_resp(resp)
             return cls.from_deezer(resp["album"])
         raise Exception(f"Invalid source: '{source}'")
 

@@ -18,6 +18,13 @@ from .semaphore import global_download_semaphore
 
 logger = logging.getLogger("streamrip")
 
+# Helper function to compare names ignoring dots, commas and symbols
+def normalize_text(text: str) -> str:
+    if not text:
+        return ""
+    # Remove anything that is NOT a letter or number and convert to lowercase
+    # Ex: "fun., Janelle Monáe" -> "funjanellemonae"
+    return re.sub(r'[\W_]+', '', text).lower()
 
 @dataclass(slots=True)
 class Track(Media):
@@ -40,48 +47,54 @@ class Track(Media):
         if not self.download_path:
             self._set_download_path()
 
-        # Verificar si el archivo existe físicamente
+        # Check physical file
         if os.path.isfile(self.download_path):
-            # Archivo existe - registrar en DB si no está
             if not self.db.downloaded(self.meta.info.id):
                 logger.info(f"[!] Track exists on disk but not in database. Registering: {os.path.basename(self.download_path)}")
                 self.db.set_downloaded(self.meta.info.id)
             return
 
-        # Si llegamos aquí, el archivo NO existe - proceder con descarga
         async with global_download_semaphore(self.config.session.downloads):
-            # Formato simple: número, artista y título
+            # Truncate artist and title for the progress bar if too long
             artist = self.meta.artist if (self.meta.artist and self.meta.artist.strip()) else "Unknown Artist"
+            if len(artist) > 25:
+                artist = artist[:22] + "..."
+                
             title = self.meta.title if (self.meta.title and self.meta.title.strip()) else f"Track {self.meta.tracknumber}"
+            if len(title) > 35:
+                title = title[:32] + "..."
             
             track_num = str(self.meta.tracknumber).zfill(2)
             full_desc = f"{track_num} {artist} - {title}"
 
-            callback = get_progress_callback(
+            # Use Handle correctly with context manager
+            handle = get_progress_callback(
                 self.config.session.cli.progress_bars,
                 await self.downloadable.size(),
                 full_desc
             )
             
-            retry = False
+            # First attempt
             try:
-                await self.downloadable.download(self.download_path, callback)
-            except Exception as e:
+                with handle as update_fn:
+                    await self.downloadable.download(self.download_path, update_fn)
+                return  # Success
+            except (asyncio.TimeoutError, Exception) as e:
                 logger.error(f"Error downloading '{self.meta.title}', retrying: {e}")
-                retry = True
-
-            if not retry:
-                return
-
-            callback_retry = get_progress_callback(
+                # Short pause before retry
+                await asyncio.sleep(2)
+            
+            # Second attempt (Retry)
+            handle_retry = get_progress_callback(
                 self.config.session.cli.progress_bars,
                 await self.downloadable.size(),
-                f"{full_desc} (retry)"
+                full_desc
             )
             
             try:
-                await self.downloadable.download(self.download_path, callback_retry)
-            except Exception as e:
+                with handle_retry as update_fn:
+                    await self.downloadable.download(self.download_path, update_fn)
+            except (asyncio.TimeoutError, Exception) as e:
                 logger.error(f"Persistent error '{self.meta.title}', skipping: {e}")
                 self.db.set_failed(self.downloadable.source, "track", self.meta.info.id)
 
@@ -112,13 +125,25 @@ class Track(Media):
         formatter = c.track_format
         track_path = self.meta.format_track_path(formatter)
         
-        # Eliminar featuring duplicado
-        match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
+        # --- SMART "FUZZY" LOGIC TO REMOVE FEATURINGS ---
+        # Detects (feat. X), (ft. X), (with X), (starring X)
+        match = re.search(r"\s*\((?:f(?:ea)?t\.?|with|starring)\s+(.*?)\)", track_path, flags=re.IGNORECASE)
         
         if match:
-            feat_artist = match.group(1)
-            if feat_artist.lower() in self.meta.artist.lower():
-                track_path = track_path.replace(match.group(0), "")
+            full_match_text = match.group(0)  # "(feat. Janelle Monae)"
+            feat_artist_name = match.group(1)  # "Janelle Monae"
+            
+            # Normalize both names (remove dots, accents, symbols)
+            simple_feat = normalize_text(feat_artist_name)
+            simple_main_artist = normalize_text(self.meta.artist)
+            
+            # Compare simplified versions
+            # If "janellemonae" is inside "funjanellemonae", remove.
+            if len(simple_feat) > 2 and simple_feat in simple_main_artist:
+                track_path = track_path.replace(full_match_text, "")
+                # Clean double spaces that might have been left
+                track_path = re.sub(r'\s+', ' ', track_path).strip()
+        # ----------------------------------------------------
 
         if self.meta.info.explicit and "explicit" not in track_path.lower():
             track_path += " [Explicit]"
@@ -144,13 +169,8 @@ class PendingTrack(Pending):
     async def resolve(self) -> Track | None:
         source = self.client.source
         
-        # ================================================================
-        # OPCIÓN C: HÍBRIDO - Verificar DB primero
-        # ================================================================
+        # Verificación híbrida (DB + Disponibilidad online)
         if self.db.downloaded(self.id):
-            # Está en DB - necesitamos verificar archivo físico
-            # Para eso necesitamos construir la ruta del archivo
-            
             try:
                 resp = await self.client.get_metadata(self.id, "track")
             except NonStreamableError as e:
@@ -167,7 +187,6 @@ class PendingTrack(Pending):
                 self.db.set_failed(source, "track", self.id)
                 return None
 
-            # Construir ruta del archivo para verificar
             downloads_config = self.config.session.downloads
             if downloads_config.disc_subdirectories and self.album.disctotal > 1:
                 folder = os.path.join(self.folder, f"Disc {meta.discnumber}")
@@ -178,12 +197,19 @@ class PendingTrack(Pending):
             formatter = c.track_format
             track_path = meta.format_track_path(formatter)
             
-            # Eliminar featuring duplicado
-            match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
+            # --- FEATURING LOGIC FOR PENDING ---
+            match = re.search(r"\s*\((?:f(?:ea)?t\.?|with|starring)\s+(.*?)\)", track_path, flags=re.IGNORECASE)
             if match:
-                feat_artist = match.group(1)
-                if feat_artist.lower() in meta.artist.lower():
-                    track_path = track_path.replace(match.group(0), "")
+                full_match_text = match.group(0)
+                feat_artist_name = match.group(1)
+                
+                simple_feat = normalize_text(feat_artist_name)
+                simple_main_artist = normalize_text(meta.artist)
+                
+                if len(simple_feat) > 2 and simple_feat in simple_main_artist:
+                    track_path = track_path.replace(full_match_text, "")
+                    track_path = re.sub(r'\s+', ' ', track_path).strip()
+            # -------------------------------------
 
             if meta.info.explicit and "explicit" not in track_path.lower():
                 track_path += " [Explicit]"
@@ -192,7 +218,6 @@ class PendingTrack(Pending):
             if c.truncate_to > 0 and len(track_path) > c.truncate_to:
                 track_path = track_path[: c.truncate_to]
 
-            # Necesitamos saber la extensión - obtener downloadable
             quality = self.config.session.get_source(source).quality
             try:
                 downloadable = await self.client.get_downloadable(self.id, quality)
@@ -202,15 +227,11 @@ class PendingTrack(Pending):
 
             file_path = os.path.join(folder, f"{track_path}.{downloadable.extension}")
             
-            # Verificar si el archivo existe físicamente
             if os.path.isfile(file_path):
-                # Archivo existe y está en DB - Skip silencioso
                 logger.info(f"[✓] Track already exists and registered: {os.path.basename(file_path)}")
                 return None
             else:
-                # Archivo NO existe pero está en DB - Re-descarga
                 logger.warning(f"[!] Track in database but file missing. Re-downloading: {os.path.basename(file_path)}")
-                # Continuar y crear Track para re-descargar
                 try:
                     cover_path = self.cover_path
                 except:
@@ -218,9 +239,7 @@ class PendingTrack(Pending):
                 
                 return Track(meta, downloadable, self.config, folder, cover_path, self.db)
         
-        # ================================================================
-        # NO está en DB - Descarga normal
-        # ================================================================
+        # NO está en DB, proceder descarga normal
         try:
             resp = await self.client.get_metadata(self.id, "track")
         except NonStreamableError as e:
@@ -261,9 +280,8 @@ class PendingSingle(Pending):
     db: Database
 
     async def resolve(self) -> Track | None:
-        # Para singles, aplicar misma lógica híbrida
+        # Verificación híbrida para singles también
         if self.db.downloaded(self.id):
-            # Verificar archivo físico
             try:
                 resp = await self.client.get_metadata(self.id, "track")
             except NonStreamableError as e:
@@ -299,12 +317,19 @@ class PendingSingle(Pending):
             formatter = c.track_format
             track_path = meta.format_track_path(formatter)
             
-            # Eliminar featuring duplicado
-            match = re.search(r"\s*\(f(?:ea)?t\.?\s+(.*?)\)", track_path, flags=re.IGNORECASE)
+            # --- FEATURING LOGIC FOR SINGLE ---
+            match = re.search(r"\s*\((?:f(?:ea)?t\.?|with|starring)\s+(.*?)\)", track_path, flags=re.IGNORECASE)
             if match:
-                feat_artist = match.group(1)
-                if feat_artist.lower() in meta.artist.lower():
-                    track_path = track_path.replace(match.group(0), "")
+                full_match_text = match.group(0)
+                feat_artist_name = match.group(1)
+                
+                simple_feat = normalize_text(feat_artist_name)
+                simple_main_artist = normalize_text(meta.artist)
+                
+                if len(simple_feat) > 2 and simple_feat in simple_main_artist:
+                    track_path = track_path.replace(full_match_text, "")
+                    track_path = re.sub(r'\s+', ' ', track_path).strip()
+            # ------------------------------------
 
             if meta.info.explicit and "explicit" not in track_path.lower():
                 track_path += " [Explicit]"
@@ -313,7 +338,6 @@ class PendingSingle(Pending):
             if c.truncate_to > 0 and len(track_path) > c.truncate_to:
                 track_path = track_path[: c.truncate_to]
 
-            # Obtener downloadable para extensión
             downloadable = await self.client.get_downloadable(self.id, quality)
             file_path = os.path.join(folder, f"{track_path}.{downloadable.extension}")
             
@@ -322,7 +346,6 @@ class PendingSingle(Pending):
                 return None
             else:
                 logger.warning(f"[!] Single in database but file missing. Re-downloading: {os.path.basename(file_path)}")
-                # Continuar para re-descargar
                 os.makedirs(folder, exist_ok=True)
                 embedded_cover_path = await self._download_cover(album.covers, folder)
                 return Track(meta, downloadable, self.config, folder, embedded_cover_path, self.db, is_single=True)

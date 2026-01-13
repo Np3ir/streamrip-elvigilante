@@ -1,45 +1,94 @@
 import time
 import sys
-import os
+import random
+import threading
+from pathlib import Path
 
-# Add the site-packages directory to path
-sys.path.append(r"c:\Users\DJELVIGILANTE\AppData\Local\Programs\Python\Python313\Lib\site-packages")
+# --- Try to add the current Python's site-packages automatically (no hardcode) ---
+def _add_site_packages() -> None:
+    base = Path(sys.executable).resolve().parent
+    candidate = base / "Lib" / "site-packages"
+    if candidate.exists():
+        p = str(candidate)
+        if p not in sys.path:
+            sys.path.append(p)
 
-from streamrip.progress import get_progress_callback, clear_progress
+_add_site_packages()
 
-def simulate_download(filename, size, speed_delay):
-    print(f"Starting download: {filename}")
+from progress import get_progress_callback, clear_progress, add_title, remove_title
+from console import console  # same Rich console used by streamrip
+
+
+def simulate_download(filename: str, size: int, base_delay: float, jitter: float = 0.02) -> None:
+    """
+    Simulates a download with variable chunk sizes + delay jitter.
+    Runs safely in a thread.
+    """
+    console.print(f"[bold]Starting:[/bold] {filename}")
+
     handle = get_progress_callback(True, size, filename)
-    
+
     downloaded = 0
-    chunk_size = 1024 * 1024  # 1MB chunks
-    
+    base_chunk = 1024 * 512  # 512KB base chunk (more updates -> stresses progress)
+
     with handle as update:
         while downloaded < size:
-            time.sleep(speed_delay)
-            downloaded += chunk_size
-            if downloaded > size:
-                downloaded = size
-            update(chunk_size)
-    
-    # After 'with' block, _done() is called.
-    # In this version, the task should REMAIN VISIBLE.
-    print(f"Finished download: {filename} (Task should REMAIN VISIBLE)")
-    time.sleep(0.5) 
+            # jitter makes each thread behave differently
+            time.sleep(max(0.0, base_delay + random.uniform(-jitter, jitter)))
 
-def main():
-    print("Restoring original minimalist progress bar...")
-    
+            # variable chunk size
+            chunk_size = base_chunk + random.randint(0, base_chunk)
+
+            # prevent overshoot
+            step = min(chunk_size, size - downloaded)
+            downloaded += step
+            update(step)
+
+    console.print(f"[green]Finished:[/green] {filename}")
+
+
+def main() -> None:
+    album_title = "Stress Test: Multi-thread Downloads (Long Names + Concurrency)"
+
     files = [
-        ("Long Name Song 1 - Artist Name - Album Name - Very Long Title Indeed.flac", 10 * 1024 * 1024, 0.05),
-        ("Short.flac", 5 * 1024 * 1024, 0.1),
+        ("01. Artist With a Very Long Name Indeed - This Song Title Is Also Extremely Long and Should Be Truncated.flac", 30 * 1024 * 1024, 0.015),
+        ("02. Normal Artist - Short Song.flac", 22 * 1024 * 1024, 0.020),
+        ("03. Another Very Very Long Artist Name - Another Incredibly Long Track Title That Must Be Truncated Properly.flac", 28 * 1024 * 1024, 0.018),
+        ("04. DJELVIGILANTE - Club Edit Extended Mix With Extra Long Name.flac", 18 * 1024 * 1024, 0.024),
     ]
-    
-    for name, size, delay in files:
-        simulate_download(name, size, delay)
-        
-    clear_progress()
-    print("Test complete.")
+
+    threads: list[threading.Thread] = []
+
+    try:
+        console.print("[bold]Starting concurrent progress demonstration...[/bold]")
+        add_title(album_title)
+
+        # Start all threads
+        for name, size, delay in files:
+            t = threading.Thread(target=simulate_download, args=(name, size, delay), daemon=True)
+            threads.append(t)
+            t.start()
+
+        # Wait all
+        for t in threads:
+            t.join()
+
+        console.print("[bold green]All downloads completed.[/bold green]")
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted (CTRL+C). Cleaning up...[/yellow]")
+
+    finally:
+        # Ensure the Live gets stopped and title cache updated
+        try:
+            remove_title(album_title)
+        except Exception:
+            pass
+        try:
+            clear_progress()
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     main()

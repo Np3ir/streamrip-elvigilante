@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import shutil
-import time  # Importante para el retry
+import time  # Important for retry logic
 
 import aiohttp
 from PIL import Image
@@ -18,30 +18,30 @@ logger = logging.getLogger("streamrip")
 
 def remove_artwork_tempdirs():
     """
-    Intenta eliminar los directorios temporales de arte.
-    Incluye lógica de reintento para evitar [WinError 32] en Windows.
+    Attempts to remove temporary artwork directories.
+    Includes retry logic to avoid [WinError 32] on Windows.
     """
     logger.debug("Removing dirs %s", _artwork_tempdirs)
 
     dirs_to_remove = list(_artwork_tempdirs)
 
     for path in dirs_to_remove:
-        # Intentamos hasta 3 veces borrar la carpeta
+        # Attempt up to 3 times to delete the folder
         for attempt in range(3):
             try:
                 if os.path.exists(path):
                     shutil.rmtree(path)
-                # Si llegamos aquí, se borró o no existía.
-                # Lo sacamos del set global si es posible (opcional, pero limpio)
+                # If we reach here, it was deleted or didn't exist.
+                # Remove it from the global set if possible (optional, but clean)
                 if path in _artwork_tempdirs:
                     _artwork_tempdirs.remove(path)
-                break  # Éxito, salimos del bucle de intentos
+                break  # Success, exit the retry loop
 
             except FileNotFoundError:
-                break  # Ya no existe, trabajo hecho
+                break  # Already gone, job done
 
             except PermissionError:
-                # Windows bloqueó el archivo. Esperamos un poco.
+                # Windows locked the file. Wait a bit.
                 if attempt < 2:
                     time.sleep(0.5)
                 else:

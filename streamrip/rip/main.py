@@ -38,7 +38,7 @@ class Main:
     def __init__(self, config: Config):
         self.config = config
 
-        # Load config.toml from APPDATA to override defaults
+        # --- BRUTE FORCE: LOAD CONFIG.TOML FROM APPDATA ---
         try:
             appdata = os.environ.get("APPDATA")
             manual_config_path = os.path.join(appdata, "streamrip", "config.toml")
@@ -52,19 +52,19 @@ class Main:
                 with open(manual_config_path, "rb") as f:
                     data = tomllib.load(f)
 
-                # 1. Override download folder
+                # 1. Force Download Folder
                 if "downloads" in data and "folder" in data["downloads"]:
                     target_folder = data["downloads"]["folder"]
                     self.config.session.downloads.folder = target_folder
 
-                # 2. Override folder and track formats
+                # 2. Force Folder Format
                 if "filepaths" in data:
                     if "folder_format" in data["filepaths"]:
                         self.config.session.filepaths.folder_format = data["filepaths"]["folder_format"]
                     if "track_format" in data["filepaths"]:
                         self.config.session.filepaths.track_format = data["filepaths"]["track_format"]
 
-                # 3. Read database paths from config
+                # 3. Read Database Paths
                 if "database" in data:
                     if "downloads_path" in data["database"]:
                         db_path = data["database"]["downloads_path"]
@@ -73,13 +73,12 @@ class Main:
             else:
                 os.makedirs(target_folder, exist_ok=True)
 
-        except Exception as e:
-            # Fall back to defaults if config loading fails
+        except Exception:
             target_folder = config.session.downloads.folder
             db_path = os.path.join(target_folder, "downloads.db")
             failed_db_path = os.path.join(target_folder, "failed_downloads.db")
 
-        # Initialize streaming service clients
+        # Initialize Clients
         self.clients: dict[str, Client] = {
             "qobuz": QobuzClient(config),
             "tidal": TidalClient(config),
@@ -87,22 +86,22 @@ class Main:
             "soundcloud": SoundcloudClient(config),
         }
 
-        # Initialize database with configured paths
+        # Initialize Database with correct paths
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         os.makedirs(os.path.dirname(failed_db_path), exist_ok=True)
 
         downloads_db = db.Downloads(db_path)
         failed_downloads_db = db.Failed(failed_db_path)
         self.database = db.Database(downloads_db, failed_downloads_db)
+        # -----------------------------------------------------------
 
-        # Queue for managing pending downloads
         self.queue = asyncio.Queue()
         self.producer_tasks = []
+        self.skipped_items = 0  # count of items skipped due to errors
 
     async def add(self, url: str):
-        """Add a URL to the download queue"""
-        # Special handling for Tidal artist URLs (streaming mode)
-        tidal_artist_match = re.search(r'tidal\.com.*/artist/(\d+)', url)
+        # Background streaming for Tidal artists
+        tidal_artist_match = re.search(r"tidal\.com.*/artist/(\d+)", url)
 
         if tidal_artist_match:
             artist_id = tidal_artist_match.group(1)
@@ -110,7 +109,6 @@ class Main:
             self.producer_tasks.append(task)
             return
 
-        # Parse and queue standard URLs
         parsed = parse_url(url)
         if parsed is None:
             raise Exception(f"Unable to parse url {url}")
@@ -118,36 +116,53 @@ class Main:
         item = await parsed.into_pending(client, self.config, self.database)
         await self.queue.put(item)
 
-    async def _background_search_artist(self, artist_id):
-        """Stream all albums from a Tidal artist in the background"""
+    async def _background_search_artist(self, artist_id: str):
         try:
             client = await self.get_logged_in_client("tidal")
 
-            # Fetch artist name for better UI display
+            # Fetch Artist Name for better UI
             display_name = artist_id
             try:
                 artist_meta = await client.get_metadata(artist_id, "artist")
-                if "name" in artist_meta:
+                if isinstance(artist_meta, dict) and "name" in artist_meta:
                     display_name = artist_meta["name"]
-            except:
-                pass  # Use ID if name fetch fails
+            except Exception:
+                pass
 
             console.print(f"[green]Streaming started: Searching releases for {display_name}...[/green]")
 
-            # Stream albums in batches and queue them
+            # Avoid duplicates
+            seen_albums: set[str] = set()
+            total_albums = 0
+            skipped_duplicates = 0
+
             async for album_batch in client.get_artist_albums_stream(artist_id):
                 count = 0
                 for album in album_batch:
-                    if 'id' in album:
-                        item = PendingAlbum(str(album['id']), client, self.config, self.database)
-                        await self.queue.put(item)
-                        count += 1
-                console.print(f"[dim]>> Queue fed: +{count} albums[/dim]")
-        except Exception as e:
-            logger.error(f"Error in background search: {e}")
+                    album_id = str(album.get("id")) if isinstance(album, dict) else ""
+                    if not album_id:
+                        continue
+
+                    if album_id in seen_albums:
+                        skipped_duplicates += 1
+                        continue
+
+                    seen_albums.add(album_id)
+                    await self.queue.put(PendingAlbum(album_id, client, self.config, self.database))
+                    count += 1
+                    total_albums += 1
+
+                if count > 0:
+                    console.print(
+                        f"[dim]>> Queue fed: +{count} albums (total: {total_albums}, skipped {skipped_duplicates} duplicates)[/dim]"
+                    )
+
+            console.print(f"[green]✓ Finished streaming {display_name}: {total_albums} unique albums found[/green]")
+
+        except Exception:
+            logger.debug("Error in background search", exc_info=True)
 
     async def add_by_id(self, source: str, media_type: str, id: str):
-        """Add a media item by source, type, and ID"""
         client = await self.get_logged_in_client(source)
         if media_type == "track":
             item = PendingSingle(id, client, self.config, self.database)
@@ -160,11 +175,10 @@ class Main:
         elif media_type == "artist":
             item = PendingArtist(id, client, self.config, self.database)
         else:
-            raise Exception(f"Unknown media type: {media_type}")
+            raise Exception(media_type)
         await self.queue.put(item)
 
     async def add_all(self, urls: list[str]):
-        """Add multiple URLs to the queue"""
         for url in urls:
             try:
                 await self.add(url)
@@ -172,40 +186,60 @@ class Main:
                 console.print(f"[red]Error adding {url}: {e}[/red]")
 
     async def resolve(self):
-        """Placeholder for future resolve logic"""
         pass
 
     async def rip(self):
-        """Start the download workers and process the queue"""
-        # Create 4 concurrent workers
-        workers = [asyncio.create_task(self.worker_loop()) for _ in range(4)]
-        
-        # Wait for all producer tasks to complete
+        workers = [asyncio.create_task(self.worker_loop(i)) for i in range(4)]
         if self.producer_tasks:
             await asyncio.gather(*self.producer_tasks)
-        
-        # Wait for queue to be fully processed
+
         await self.queue.join()
-        
-        # Cancel workers
+
         for w in workers:
             w.cancel()
 
-    async def worker_loop(self):
-        """Worker that processes items from the queue"""
+        # Clean end summary
+        if self.skipped_items > 5:
+            console.print(f"[yellow]⚠ Skipped {self.skipped_items} item(s) due to metadata errors.[/yellow]")
+
+        clear_progress()
+
+    async def worker_loop(self, worker_id: int):
         while True:
             pending_item = await self.queue.get()
             try:
                 media_item = await pending_item.resolve()
-                if media_item is not None:
-                    await media_item.rip()
-            except Exception as e:
-                logger.error(f"Error processing item: {e}")
+                if media_item is None:
+                    self.skipped_items += 1
+                    # DEBUG: identify what object was skipped
+                    pid = getattr(pending_item, "id", None)
+                    src = getattr(pending_item, "client", None)
+                    src_name = getattr(src, "source", None) if src is not None else None
+                    logger.debug(
+                        f"[worker {worker_id}] resolve() returned None; "
+                        f"pending_type={type(pending_item).__name__} id={pid} source={src_name}"
+                    )
+                    continue
+
+                await media_item.rip()
+
+            except Exception:
+                self.skipped_items += 1
+                # DEBUG: identify the exact pending object that caused the exception
+                pid = getattr(pending_item, "id", None)
+                src = getattr(pending_item, "client", None)
+                src_name = getattr(src, "source", None) if src is not None else None
+                logger.debug(
+                    f"[worker {worker_id}] item failed; "
+                    f"pending_type={type(pending_item).__name__} id={pid} source={src_name}",
+                    exc_info=True,
+                )
+                # NOTE: no WARNING here to avoid console/UI spam
+
             finally:
                 self.queue.task_done()
 
     async def get_logged_in_client(self, source: str):
-        """Get a logged-in client for the specified source"""
         client = self.clients.get(source)
         if client is None:
             raise Exception(f"No client named {source}")
@@ -222,13 +256,9 @@ class Main:
         return self
 
     async def __aexit__(self, *_):
-        """Cleanup resources on exit"""
-        # Close all client sessions
         for client in self.clients.values():
             if hasattr(client, "session"):
                 await client.session.close()
-        
-        # Close database connections
         try:
             if hasattr(self.database, "downloads") and hasattr(self.database.downloads, "close"):
                 self.database.downloads.close()
@@ -236,13 +266,10 @@ class Main:
                 self.database.failed.close()
         except Exception:
             pass
-        
-        # Clean up temporary artwork directories
         remove_artwork_tempdirs()
 
 
 def run_main():
-    """Entry point for the CLI"""
     async def main():
         config = Config()
         async with Main(config) as ripper:

@@ -446,7 +446,7 @@ class QobuzClient(Client):
         url = f"{QOBUZ_BASE_URL}/{epoint}"
         logger.debug("api_request: endpoint=%s, params=%s", epoint, params)
         async with self.rate_limiter:
-            async with self.session.get(url, params=params) as response:
+            async with self.session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 return response.status, await response.json()
 
     @staticmethod

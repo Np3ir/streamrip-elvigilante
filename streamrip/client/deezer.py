@@ -3,7 +3,7 @@ import binascii
 import hashlib
 import logging
 
-import aiohttp  # ← AGREGADO: Importar aiohttp
+import aiohttp  # ← ADDED: Import aiohttp
 import deezer
 from Cryptodome.Cipher import AES
 
@@ -14,7 +14,7 @@ from ..exceptions import (
     NonStreamableError,
 )
 from .client import Client
-from ..utils.ssl_utils import get_aiohttp_connector_kwargs  # ← AGREGADO
+from ..utils.ssl_utils import get_aiohttp_connector_kwargs  # ← ADDED
 from .downloadable import DeezerDownloadable
 
 logger = logging.getLogger("streamrip")
@@ -44,29 +44,30 @@ class DeezerClient(Client):
 
     async def login(self):
         # ================================================================
-        # FIX: Crear connector con pool aumentado ANTES de la sesión
+        # FIX: Create connector with increased pool BEFORE the session
         # ================================================================
         verify_ssl = self.global_config.session.downloads.verify_ssl
         
-        # Obtener kwargs para connector (maneja SSL)
+        # Get connector kwargs (handles SSL)
         connector_kwargs = get_aiohttp_connector_kwargs(verify_ssl=verify_ssl)
         
-        # AGREGAR límites de conexión aumentados
+        # ADD increased connection limits
         connector_kwargs['limit'] = 100              # Total: 10 → 100
-        connector_kwargs['limit_per_host'] = 50      # Por host: 10 → 50
-        connector_kwargs['force_close'] = False      # Reutilizar conexiones
-        connector_kwargs['enable_cleanup_closed'] = True  # Limpieza automática
+        connector_kwargs['limit_per_host'] = 50      # Per host: 10 → 50
+        connector_kwargs['force_close'] = False      # Reuse connections
+        connector_kwargs['enable_cleanup_closed'] = True  # Auto cleanup
         
-        # Crear connector con los kwargs mejorados
+        # Create connector with improved kwargs
         connector = aiohttp.TCPConnector(**connector_kwargs)
         
-        # Crear sesión con el connector mejorado
+        # Create session with the improved connector and default timeout
         self.session = aiohttp.ClientSession(
             connector=connector,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=aiohttp.ClientTimeout(total=30)
         )
         # ================================================================
-        # FIN DEL FIX
+        # END OF FIX
         # ================================================================
         
         arl = self.config.arl
