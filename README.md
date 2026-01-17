@@ -68,7 +68,7 @@ Track 44  ████████████████  100.0% • 8.2 MB/s 
 ```bash
 # Clone this repository
 git clone https://github.com/Np3ir/streamrip-elvigilante
-cd streamrip-enhanced
+cd streamrip-elvigilante
 
 # Install dependencies
 pip install -r requirements.txt
