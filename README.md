@@ -87,14 +87,14 @@ rip url "https://tidal.com/artist/10256676"
 rip url "https://tidal.com/track/241666920"
 
 # Download an album
-streamrip url "https://tidal.com/album/463896980"
+rip url "https://tidal.com/album/463896980"
 
 # Download a playlist
 rip url "https://tidal.com/playlist/8794c2c0-cb5f-4ef5-9005-77ae8f593d87"
 
 # Download from other sources
-streamrip url "https://open.qobuz.com/album/..."
-streamrip url "https://tidal.com/playlist/8794c2c0-cb5f-4ef5-9005-77ae8f593d87"
+rip url "https://open.qobuz.com/album/..."
+rip url "https://tidal.com/playlist/8794c2c0-cb5f-4ef5-9005-77ae8f593d87"
 ```
 
 ---
