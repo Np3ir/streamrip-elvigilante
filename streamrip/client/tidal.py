@@ -14,7 +14,7 @@ from aiohttp import TCPConnector, CookieJar, ClientSession, ClientTimeout
 from ..config import Config
 from ..exceptions import NonStreamableError
 from .client import Client
-from .downloadable import TidalDownloadable
+from .downloadable import TidalDownloadable, TidalVideoDownloadable
 
 logger = logging.getLogger("streamrip")
 
@@ -35,14 +35,10 @@ QUALITY_MAP = {
     0: "LOW", 1: "HIGH", 2: "LOSSLESS", 3: "HI_RES",
 }
 
+QUALITY_PRIORITY = [3, 2, 1, 0]
+
 
 class TidalClient(Client):
-    """
-    TidalClient 'Smart-Regulated' (Compatibility Fix).
-    - Uses native get_rate_limiter(100) to satisfy streamrip internals (media.py).
-    - Uses Semaphore(5) and logic for real traffic control.
-    """
-
     source = "tidal"
     max_quality = 3
 
@@ -50,28 +46,26 @@ class TidalClient(Client):
         self.logged_in = False
         self.global_config = config
         self.config = config.session.tidal
+        
+        # --- CONFIGURACIÓN DE SEGURIDAD ---
+        rpm = config.session.downloads.requests_per_minute
+        max_conn = config.session.downloads.max_connections
+        
+        # Safe values if not defined or too high
+        safe_rpm = rpm if rpm > 0 else 60
+        # Allow up to 12 concurrent connections if configured, otherwise default to 2
+        safe_conn = max_conn if (0 < max_conn <= 12) else 2
 
-        # --- FIX: NATIVE COMPATIBILITY ---
-        # We use the original method from the parent class to create the limiter.
-        # We set it to 100 (very high) so it doesn't throttle anything; the real 
-        # throttling is handled below with the Semaphore and 429 logic.
-        self.rate_limiter = self.get_rate_limiter(100)
-
-        # Semaphore to control real concurrency (5 simultaneous downloads)
-        self.semaphore = asyncio.Semaphore(5)
-
-        # Lock for token renewal
+        self.rate_limiter = self.get_rate_limiter(safe_rpm)
+        self.semaphore = asyncio.Semaphore(safe_conn)
+        # --------------------------------------------
+        
         self.auth_lock = asyncio.Lock()
-
-    def _log(self, message: str):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] {message}")
+        self._flac_downloaded = set()
 
     async def login(self):
         jar = CookieJar(unsafe=True)
-        # Robust connector
         connector = TCPConnector(limit=10, force_close=True, enable_cleanup_closed=True)
-        # Generous timeouts
         timeout = ClientTimeout(total=3600, connect=30, sock_read=60)
 
         self.session = ClientSession(
@@ -102,16 +96,16 @@ class TidalClient(Client):
         sentinel = object()
 
         endpoints = [
-            (f"artists/{artist_id}/albums", {'limit': 100}),
+            (f"artists/{artist_id}/albums", {'limit': 100, 'includeContributors': 'true'}),
             (f"artists/{artist_id}/albums", {"filter": "EPSANDSINGLES", 'limit': 100})
         ]
 
         async def producer(ep, params):
             try:
                 async for batch in self._fetch_pages_generator(ep, params):
-                    await queue.put(batch)
+                    if batch: await queue.put(batch)
             except Exception as e:
-                logger.error(f"Error in stream producer ({ep}): {e}")
+                logger.error(f"Stream producer error ({ep}): {e}")
             finally:
                 await queue.put(sentinel)
 
@@ -131,96 +125,60 @@ class TidalClient(Client):
         p['offset'] = 0
         try:
             resp = await self._api_request(endpoint, params=p, base=API_BASE)
-        except Exception as e:
-            logger.error(f"Error fetching page 0: {e}")
+        except Exception:
             return
 
         total = resp.get("totalNumberOfItems", 0)
         items = resp.get("items", [])
         yield items
 
-        if total <= 100:
-            return
+        if total <= 100: return
 
-        page_tasks = []
         for offset in range(100, total, 100):
             p = base_params.copy()
             p['offset'] = offset
-            page_tasks.append(self._api_request(endpoint, params=p, base=API_BASE))
-
-        if page_tasks:
-            for completed_task in asyncio.as_completed(page_tasks):
-                try:
-                    page_resp = await completed_task
-                    if "items" in page_resp:
-                        yield page_resp["items"]
-                except Exception as e:
-                    logger.error(f"Error fetching offset page: {e}")
+            try:
+                page_resp = await self._api_request(endpoint, params=p, base=API_BASE)
+                if "items" in page_resp: yield page_resp["items"]
+            except Exception:
+                continue
 
     async def get_metadata(self, item_id: str, media_type: str) -> dict:
         url = f"{media_type}s/{item_id}"
+        if media_type == "mix":
+            url = f"mixes/{item_id}"
         item = await self._api_request(url, base=API_BASE)
 
-        if "releaseDate" in item:
-            item["date"] = item["releaseDate"]
-        elif "streamStartDate" in item:
-            item["date"] = item["streamStartDate"]
-        elif "dateAdded" in item:
-            item["date"] = item["dateAdded"]
+        if "releaseDate" in item: item["date"] = item["releaseDate"]
+        elif "streamStartDate" in item: item["date"] = item["streamStartDate"]
+        elif "dateAdded" in item: item["date"] = item["dateAdded"]
 
-        # --- VALIDATION AND FALLBACK FOR TRACK METADATA ---
         if media_type == "track":
-            # Validate title field
-            if "title" not in item or not item.get("title"):
-                logger.warning(f"❌ Track {item_id}: 'title' field missing or empty")
-                logger.debug(f"Track response keys: {list(item.keys())}")
-                # Use track number as fallback
-                item["title"] = f"Track {item.get('trackNumber', '?')}"
-                logger.info(f"Using fallback title: {item['title']}")
-            
-            # Validate artists field
-            if "artists" not in item or not item.get("artists"):
-                logger.warning(f"❌ Track {item_id}: 'artists' field missing or empty")
-                # Try alternative artist fields
-                if "artist" in item and isinstance(item["artist"], dict):
-                    item["artists"] = [item["artist"]]
-                    logger.info(f"Using 'artist' field as fallback: {item['artist'].get('name', 'Unknown')}")
-                else:
-                    item["artists"] = [{"name": "Unknown Artist"}]
-                    logger.warning(f"No artist information available for track {item_id}")
-            
-            # Ensure lyrics field exists (even if empty)
-            if "lyrics" not in item:
-                item["lyrics"] = ""
+            if "title" not in item: item["title"] = f"Track {item.get('trackNumber', '?')}"
+            if "artists" not in item: item["artists"] = [{"name": "Unknown Artist"}]
+            if "lyrics" not in item: item["lyrics"] = ""
 
-        elif media_type in ("playlist", "album"):
+        elif media_type in ("playlist", "album", "mix"):
             endpoint = f"{url}/items"
             params = {'limit': 100}
             if media_type == "album": params['includeContributors'] = 'true'
 
             fetched_items = await self._turbo_fetch_list(endpoint, params)
-
-            clean_tracks = []
+            
+            clean = []
             for t in fetched_items:
                 target = t.get("item", t)
                 target["lyrics"] = ""
-                # Validate each track in the album/playlist
-                if "title" not in target or not target.get("title"):
-                    target["title"] = f"Track {target.get('trackNumber', '?')}"
-                    logger.warning(f"Track in {media_type} {item_id} missing title, using fallback")
-                if "artists" not in target or not target.get("artists"):
-                    if "artist" in target:
-                        target["artists"] = [target["artist"]]
-                    else:
-                        target["artists"] = [{"name": "Unknown Artist"}]
-                clean_tracks.append(target)
-            item["tracks"] = clean_tracks
+                if "title" not in target: target["title"] = f"Track {target.get('trackNumber', '?')}"
+                if "artists" not in target: target["artists"] = [{"name": "Unknown Artist"}]
+                clean.append(target)
+            item["tracks"] = clean
 
         elif media_type == "artist":
-            item["albums"] = []
-
-        elif media_type == "track":
-            item["lyrics"] = ""
+            all_albums = []
+            async for batch in self.get_artist_albums_stream(item_id):
+                all_albums.extend(batch)
+            item["albums"] = all_albums
 
         return item
 
@@ -237,12 +195,12 @@ class TidalClient(Client):
             else:
                 return []
 
-        total_items = resp.get("totalNumberOfItems", 0)
+        total = resp.get("totalNumberOfItems", 0)
         items = resp.get("items", [])
-        if total_items <= 100: return items
+        if total <= 100: return items
 
         tasks = []
-        for offset in range(100, total_items, 100):
+        for offset in range(100, total, 100):
             p = base_params.copy()
             p['offset'] = offset
             tasks.append(self._api_request(endpoint, params=p, base=API_BASE))
@@ -262,92 +220,147 @@ class TidalClient(Client):
         if len(resp["items"]) > 1: return [resp]
         return []
 
-    async def get_downloadable(self, track_id: str, quality: int):
-        q_val = QUALITY_MAP.get(quality, "HIGH")
-        params = {"audioquality": q_val, "playbackmode": "STREAM", "assetpresentation": "FULL", "prefetch": "false"}
+    async def get_downloadable(self, track_id: str, quality: int = 3, media_type: str = "track"):
+        if media_type == "video":
+            return await self._get_video_downloadable(track_id, quality)
+
+        tid_str = str(track_id)
+        if tid_str in self._flac_downloaded:
+            raise NonStreamableError(f"Track {track_id} already downloaded")
+
+        qualities = [q for q in QUALITY_PRIORITY if q <= quality]
+        if not qualities: qualities = QUALITY_PRIORITY
+        
+        last_err = None
+        
+        # Phase 1: Try FLAC
+        for q in qualities:
+            try:
+                q_val = QUALITY_MAP.get(q, "HIGH")
+                params = {"audioquality": q_val, "playbackmode": "STREAM", "assetpresentation": "FULL", "prefetch": "false"}
+                try:
+                    resp = await self._api_request(f"tracks/{track_id}/playbackinfopostpaywall/v4", params, base=API_BASE)
+                except:
+                    resp = await self._api_request(f"tracks/{track_id}/playbackinfopostpaywall", params, base=API_BASE)
+
+                if "manifest" in resp:
+                    manifest = json.loads(base64.b64decode(resp["manifest"]).decode("utf-8"))
+                else:
+                    manifest = resp
+                
+                url = manifest.get("urls", [])[0] if "urls" in manifest else ""
+                if not url: continue
+                
+                codec = manifest.get("codecs", "flac")
+                if not codec or not isinstance(codec, str): continue
+                
+                codecs_list = [c.strip().lower() for c in codec.split(",")]
+                if "flac" in codecs_list:
+                    enc = manifest.get("keyId")
+                    if manifest.get("encryptionType") == "NONE": enc = None
+                    self._flac_downloaded.add(tid_str)
+                    return TidalDownloadable(self.session, url=url, codec="flac", encryption_key=enc, restrictions=manifest.get("restrictions"))
+                
+            except NonStreamableError: raise
+            except Exception as e:
+                last_err = e
+                continue
+        
+        # Phase 2: Try M4A/AAC
+        for q in qualities:
+            try:
+                q_val = QUALITY_MAP.get(q, "HIGH")
+                params = {"audioquality": q_val, "playbackmode": "STREAM", "assetpresentation": "FULL", "prefetch": "false"}
+                try:
+                    resp = await self._api_request(f"tracks/{track_id}/playbackinfopostpaywall/v4", params, base=API_BASE)
+                except:
+                    resp = await self._api_request(f"tracks/{track_id}/playbackinfopostpaywall", params, base=API_BASE)
+
+                if "manifest" in resp:
+                    manifest = json.loads(base64.b64decode(resp["manifest"]).decode("utf-8"))
+                else:
+                    manifest = resp
+                
+                url = manifest.get("urls", [])[0] if "urls" in manifest else ""
+                if not url: continue
+                
+                codec = manifest.get("codecs", "flac")
+                if not codec or not isinstance(codec, str): continue
+                
+                codecs_list = [c.strip().lower() for c in codec.split(",")]
+                if "m4a" in codecs_list or "aac" in codecs_list:
+                    enc = manifest.get("keyId")
+                    if manifest.get("encryptionType") == "NONE": enc = None
+                    self._flac_downloaded.add(tid_str)
+                    return TidalDownloadable(self.session, url=url, codec="m4a", encryption_key=enc, restrictions=manifest.get("restrictions"))
+                
+            except NonStreamableError: raise
+            except Exception as e:
+                last_err = e
+                continue
+        
+        raise NonStreamableError(f"No FLAC or M4A available: {last_err}")
+
+    async def _get_video_downloadable(self, video_id: str, quality: int):
+        q_map = {0: "LOW", 1: "MEDIUM", 2: "HIGH", 3: "HIGH"}
+        q_val = q_map.get(quality, "HIGH")
+
+        params = {
+            "videoquality": q_val,
+            "playbackmode": "STREAM",
+            "assetpresentation": "FULL",
+            "prefetch": "false"
+        }
+        
         try:
-            resp = await self._api_request(f"tracks/{track_id}/playbackinfopostpaywall/v4", params, base=API_BASE)
+            resp = await self._api_request(f"videos/{video_id}/playbackinfopostpaywall/v4", params, base=API_BASE)
         except:
-            resp = await self._api_request(f"tracks/{track_id}/playbackinfopostpaywall", params, base=API_BASE)
+            resp = await self._api_request(f"videos/{video_id}/playbackinfopostpaywall", params, base=API_BASE)
 
-        try:
-            if "manifest" in resp:
-                manifest = json.loads(base64.b64decode(resp["manifest"]).decode("utf-8"))
-            else:
-                manifest = resp
-        except:
-            return await self.get_downloadable(track_id, quality - 1)
+        if "manifest" in resp:
+            manifest = json.loads(base64.b64decode(resp["manifest"]).decode("utf-8"))
+        else:
+            manifest = resp
 
-        enc_key = manifest.get("keyId")
-        if manifest.get("encryptionType") == "NONE": enc_key = None
-        download_url = manifest.get("urls", [])[0] if "urls" in manifest else ""
+        url = manifest.get("urls", [])[0] if "urls" in manifest else ""
+        if not url:
+            raise NonStreamableError(f"No video URL found for {video_id}")
 
-        return TidalDownloadable(self.session, url=download_url, codec=manifest.get("codecs", "flac"),
-                                 encryption_key=enc_key, restrictions=manifest.get("restrictions"))
-
-    async def get_video_file_url(self, video_id: str) -> str:
-        params = {"videoquality": "HIGH", "playbackmode": "STREAM", "assetpresentation": "FULL"}
-        resp = await self._api_request(f"videos/{video_id}/playbackinfopostpaywall", params=params, base=VIDEO_BASE)
-        manifest = json.loads(base64.b64decode(resp["manifest"]).decode("utf-8"))
-        async with self.session.get(manifest["urls"][0]) as resp: available_urls = await resp.text()
-        *_, last_match = STREAM_URL_REGEX.finditer(available_urls)
-        return last_match.group(1) if last_match else manifest["urls"][0]
+        return TidalVideoDownloadable(self.session, url)
 
     async def _login_by_access_token(self, token: str, user_id: str):
         headers = {"authorization": f"Bearer {token}"}
         async with self.session.get(f"{API_BASE}/sessions", headers=headers) as _resp: resp = await _resp.json()
         if resp.get("status", 200) != 200: raise Exception(f"Login failed {resp}")
-        c = self.config;
-        c.user_id = resp["userId"];
-        c.country_code = resp["countryCode"];
-        c.access_token = token
+        c = self.config; c.user_id = resp["userId"]; c.country_code = resp["countryCode"]; c.access_token = token
         self._update_authorization_from_config()
-
-    async def _get_login_link(self) -> str:
-        data = {"client_id": CLIENT_ID, "scope": "r_usr+w_usr+w_sub"}
-        resp = await self._api_post(f"{AUTH_URL}/device_authorization", data)
-        return f"https://{resp['deviceCode']}"
 
     def _update_authorization_from_config(self):
         self.session.headers.update({"authorization": f"Bearer {self.config.access_token}"})
 
-    async def _get_auth_status(self, device_code):
-        data = {"client_id": CLIENT_ID, "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "scope": "r_usr+w_usr+w_sub"}
-        resp = await self._api_post(f"{AUTH_URL}/token", data, AUTH)
-        if "status" in resp and resp["status"] != 200: return (
-            2 if resp["status"] == 400 and resp["sub_status"] == 1002 else 1), {}
-        return 0, {"user_id": resp["user"]["userId"], "country_code": resp["user"]["countryCode"],
-                   "access_token": resp["access_token"], "refresh_token": resp["refresh_token"],
-                   "token_expiry": resp["expires_in"] + time.time()}
-
     async def _refresh_access_token(self):
         async with self.auth_lock:
-            if self.config.token_expiry and (float(self.config.token_expiry) - time.time() > 600):
-                return
-
-            logger.info("Refreshing Tidal access token...")
-            data = {"client_id": CLIENT_ID, "refresh_token": self.refresh_token, "grant_type": "refresh_token",
-                    "scope": "r_usr+w_usr+w_sub"}
+            if self.config.token_expiry and (float(self.config.token_expiry) - time.time() > 600): return
+            logger.info("Refreshing Tidal token...")
+            data = {"client_id": CLIENT_ID, "refresh_token": self.refresh_token, "grant_type": "refresh_token", "scope": "r_usr+w_usr+w_sub"}
             try:
-                resp = await self._api_post(f"{AUTH_URL}/token", data, AUTH)
-                if resp.get("status", 200) != 200:
-                    raise Exception("Refresh failed")
-
+                # --- FIX CRÍTICO: NO USAR SEMÁFORO AQUÍ ---
+                # Usamos self.session.post directamente.
+                # _api_post usa el semáforo, y si todas las conexiones están ocupadas esperando 
+                # que este token se refresque, se produce un bloqueo mutuo (deadlock).
+                async with self.session.post(f"{AUTH_URL}/token", data=data, auth=AUTH) as resp:
+                    resp_data = await resp.json()
+                
+                if resp_data.get("status", 200) != 200: 
+                    raise Exception(f"Refresh failed: {resp_data}")
+                
                 c = self.config
-                c.access_token = resp["access_token"]
-                c.token_expiry = resp["expires_in"] + time.time()
+                c.access_token = resp_data["access_token"]
+                c.token_expiry = resp_data["expires_in"] + time.time()
                 self._update_authorization_from_config()
-                logger.info("Tidal token refreshed successfully.")
+                logger.info("Token refreshed.")
             except Exception as e:
-                logger.error(f"Failed to refresh token: {e}")
-                raise e
-
-    async def _get_device_code(self):
-        if not hasattr(self, "session"): self.session = await self.get_session()
-        data = {"client_id": CLIENT_ID, "scope": "r_usr+w_usr+w_sub"}
-        resp = await self._api_post(f"{AUTH_URL}/device_authorization", data)
-        return resp["deviceCode"], resp["verificationUriComplete"]
+                logger.error(f"Refresh failed: {e}"); raise e
 
     async def _api_post(self, url, data, auth: aiohttp.BasicAuth | None = None) -> dict:
         async with self.semaphore:
@@ -359,47 +372,37 @@ class TidalClient(Client):
         if "limit" not in params: params["limit"] = 100
 
         for attempt in range(retries + 1):
+            # Jitter outside the semaphore to avoid blocking
+            await asyncio.sleep(random.uniform(1.0, 2.0))
+            
             async with self.semaphore:
-                url = path if path.startswith("http") else f"{base}/{path}"
+                # Rate limiter
+                if self.rate_limiter:
+                    await self.rate_limiter.acquire()
 
+                url = path if path.startswith("http") else f"{base}/{path}"
                 try:
                     async with self.session.get(url, params=params, timeout=ClientTimeout(total=30)) as resp:
-                        # --- 1. SMART AUTO-REGULATION (Backoff) ---
                         if resp.status == 429:
-                            retry_after = resp.headers.get("Retry-After")
-                            if retry_after:
-                                wait = int(retry_after) + 1
-                                logger.warning(f"Tidal says STOP. Cooling down for {wait}s...")
-                            else:
-                                jitter = random.uniform(0.5, 2.0)
-                                wait = (5 * (2 ** attempt)) + jitter
-                                logger.warning(f"Rate Limit hit. Backing off for {wait:.1f}s...")
-
+                            wait = int(resp.headers.get("Retry-After", 10)) + random.randint(5, 10)
+                            logger.warning(f"Rate Limit hit. Backing off {wait}s...")
                             await asyncio.sleep(wait)
                             continue
-
-                        # --- 2. AUTHENTICATION REFRESH ---
                         if resp.status == 401:
                             if attempt < 2:
-                                logger.warning("Token expired (401). Refreshing...")
-                                await asyncio.sleep(1)
                                 await self._refresh_access_token()
                                 continue
                             else:
-                                raise Exception("Tidal returned 401 (Unauthorized) repeatedly.")
-
-                        # --- 3. RESOURCE MISSING ---
+                                raise Exception("Unauthorized (401)")
                         if resp.status == 404:
-                            raise NonStreamableError("TIDAL: Resource not found (404)")
-
+                            raise NonStreamableError("Not Found")
                         resp.raise_for_status()
                         try:
                             return await resp.json()
                         except:
                             return json.loads(await resp.text())
-
                 except (aiohttp.ClientOSError, asyncio.TimeoutError):
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)
                     continue
                 except Exception as e:
                     if "401" in str(e) and attempt < 2:
@@ -407,5 +410,5 @@ class TidalClient(Client):
                         continue
                     if attempt == retries:
                         raise e
-
-        raise Exception(f"Connection failed after {retries} retries.")
+        
+        raise Exception("Connection failed.")

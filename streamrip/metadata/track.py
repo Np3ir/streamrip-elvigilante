@@ -45,7 +45,7 @@ class TrackMetadata:
             "composer": self.composer or none_str,
             "albumcomposer": getattr(self.album, "albumcomposer", none_str),
             "tracknumber": self.tracknumber,
-            "explicit": "(Explicit)" if self.info.explicit else "",
+            "explicit": "(explicit)" if self.info.explicit else "",
         }
 
         # Use imported clean_filename (respects accents, swaps : for ：)

@@ -14,11 +14,13 @@ from ..media import (
     PendingLabel,
     PendingPlaylist,
     PendingSingle,
+    PendingUser,
+    PendingVideo,
 )
 
 logger = logging.getLogger("streamrip")
 URL_REGEX = re.compile(
-    r"https?://(?:www|open|play|listen)?\.?(qobuz|tidal|deezer)\.com(?:(?:/(album|artist|track|playlist|video|label))|(?:\/[-\w]+?))+\/([-\w]+)",
+    r"https?://(?:www|open|play|listen)?\.?(qobuz|tidal|deezer)\.com(?:(?:/(album|artist|track|playlist|video|label|mix|user|users))|(?:\/[-\w]+?))+\/([-\w]+)",
 )
 SOUNDCLOUD_URL_REGEX = re.compile(r"https://soundcloud.com/[-\w:/]+")
 LASTFM_URL_REGEX = re.compile(r"https://www.last.fm/user/\w+/playlists/\w+")
@@ -79,10 +81,21 @@ class GenericURL(URL):
             return PendingAlbum(item_id, client, config, db)
         elif media_type == "playlist":
             return PendingPlaylist(item_id, client, config, db)
+        elif media_type == "mix":
+            return PendingPlaylist(item_id, client, config, db, media_type="mix")
+        elif media_type == "video":
+            return PendingVideo(item_id, client, config, db)
         elif media_type == "artist":
             return PendingArtist(item_id, client, config, db)
         elif media_type == "label":
             return PendingLabel(item_id, client, config, db)
+        elif media_type in ("user", "users"):
+            tid = item_id
+            if tid == "me" and source == "tidal":
+                tid = config.session.tidal.user_id
+                if not tid:
+                    raise Exception("User ID not found in config. Please login first.")
+            return PendingUser(tid, client, config, db)
         raise NotImplementedError
 
 

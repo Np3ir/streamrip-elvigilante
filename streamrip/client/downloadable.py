@@ -17,7 +17,6 @@ from typing import Any, Callable, Optional
 import aiofiles
 import aiohttp
 import m3u8
-import requests
 from Cryptodome.Cipher import AES, Blowfish
 from Cryptodome.Util import Counter
 
@@ -37,30 +36,33 @@ def generate_temp_path(url: str):
     )
 
 
-async def fast_async_download(path, url, headers, callback):
-    """Synchronous download with yield for every 1MB read.
-
-    Using aiofiles/aiohttp resulted in a yield to the event loop for every 1KB,
-    which made file downloads CPU-bound. This resulted in a ~10MB max total download
-    speed. This fixes the issue by only yielding to the event loop for every 1MB read.
+async def fast_async_download(path, url, headers, callback, session: aiohttp.ClientSession = None):
+    """Asynchronous download using aiohttp with large chunks to avoid CPU overhead.
+    
+    Replaces the previous requests-based implementation to prevent blocking the event loop.
     """
     chunk_size: int = 2**17  # 131 KB
-    counter = 0
-    yield_every = 8  # 1 MB
-    with open(path, "wb") as file:  # noqa: ASYNC101
-        with requests.get(  # noqa: ASYNC100
-            url,
-            headers=headers,
-            allow_redirects=True,
-            stream=True,
-            timeout=(10, 30),
-        ) as resp:
-            for chunk in resp.iter_content(chunk_size=chunk_size):
-                file.write(chunk)
-                callback(len(chunk))
-                if counter % yield_every == 0:
-                    await asyncio.sleep(0)
-                counter += 1
+    
+    async def _do_download(client_session: aiohttp.ClientSession):
+        # Merge headers if provided, but session might already have them
+        # If headers are provided, we should use them for the request
+        req_headers = headers if headers else None
+        
+        async with client_session.get(url, headers=req_headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+            resp.raise_for_status()
+            with open(path, "wb") as file:
+                while True:
+                    chunk = await resp.content.read(chunk_size)
+                    if not chunk:
+                        break
+                    file.write(chunk)
+                    callback(len(chunk))
+
+    if session:
+        await _do_download(session)
+    else:
+        async with aiohttp.ClientSession() as new_sess:
+            await _do_download(new_sess)
 
 
 @dataclass(slots=True)
@@ -114,7 +116,7 @@ class BasicDownloadable(Downloadable):
         self.source: str = source or "Unknown"
 
     async def _download(self, path: str, callback):
-        await fast_async_download(path, self.url, self.session.headers, callback)
+        await fast_async_download(path, self.url, self.session.headers, callback, session=self.session)
 
 
 class DeezerDownloadable(Downloadable):
@@ -143,7 +145,7 @@ class DeezerDownloadable(Downloadable):
 
     async def _download(self, path: str, callback):
         # with requests.Session().get(self.url, allow_redirects=True) as resp:
-        async with self.session.get(self.url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+        async with self.session.get(self.url, allow_redirects=True) as resp:
             resp.raise_for_status()
             self._size = int(resp.headers.get("Content-Length", 0))
             if self._size < 20000 and not self.url.endswith(".jpg"):
@@ -161,7 +163,7 @@ class DeezerDownloadable(Downloadable):
             if self.is_encrypted.search(self.url) is None:
                 logger.debug(f"Deezer file at {self.url} not encrypted.")
                 await fast_async_download(
-                    path, self.url, self.session.headers, callback
+                    path, self.url, self.session.headers, callback, session=self.session
                 )
             else:
                 blowfish_key = self._generate_blowfish_key(self.id)
@@ -337,7 +339,7 @@ class SoundcloudDownloadable(Downloadable):
 
     async def _download_mp3(self, path: str, callback):
         # TODO: make progress bar reflect bytes
-        async with self.session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        async with self.session.get(self.url) as resp:
             content = await resp.text("utf-8")
 
         parsed_m3u = m3u8.loads(content)
@@ -347,16 +349,15 @@ class SoundcloudDownloadable(Downloadable):
             for segment in parsed_m3u.segments
         ]
 
-        segment_paths = []
-        for coro in asyncio.as_completed(tasks):
-            segment_paths.append(await coro)
+        segment_paths = await asyncio.gather(*tasks)
+        for _ in segment_paths:
             callback(1)
 
         await concat_audio_files(segment_paths, path, "mp3")
 
     async def _download_segment(self, segment_uri: str) -> str:
         tmp = generate_temp_path(segment_uri)
-        async with self.session.get(segment_uri, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        async with self.session.get(segment_uri) as resp:
             resp.raise_for_status()
             async with aiofiles.open(tmp, "wb") as file:
                 content = await resp.content.read()
@@ -365,7 +366,7 @@ class SoundcloudDownloadable(Downloadable):
 
     async def size(self) -> int:
         if self.file_type == "mp3":
-            async with self.session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with self.session.get(self.url) as resp:
                 content = await resp.text("utf-8")
 
             parsed_m3u = m3u8.loads(content)
@@ -433,3 +434,121 @@ async def concat_audio_files(paths: list[str], out: str, ext: str, max_files_ope
 
     # Recurse on remaining batches
     await concat_audio_files(outpaths, out, ext)
+
+
+class TidalVideoDownloadable(Downloadable):
+    def __init__(self, session, url: str):
+        self.session = session
+        self.url = url
+        self.extension = "ts"
+        self.source = "tidal"
+
+    async def _download(self, path: str, callback):
+        async with self.session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            content = await resp.text("utf-8")
+
+        parsed_m3u = m3u8.loads(content, uri=self.url)
+        
+        # Handle Master Playlist
+        if parsed_m3u.playlists:
+            # Sort by bandwidth
+            playlists = sorted(parsed_m3u.playlists, key=lambda p: p.stream_info.bandwidth, reverse=True)
+            best_playlist = playlists[0]
+            # Fetch the stream playlist
+            async with self.session.get(best_playlist.absolute_uri, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                content = await resp.text("utf-8")
+            parsed_m3u = m3u8.loads(content, uri=best_playlist.absolute_uri)
+
+        self._size = len(parsed_m3u.segments)
+        
+        tasks = []
+        for segment in parsed_m3u.segments:
+            tasks.append(asyncio.create_task(self._download_segment(segment.absolute_uri)))
+
+        segment_paths = await asyncio.gather(*tasks)
+        for _ in segment_paths:
+            callback(1)
+
+        await concat_video_files(segment_paths, path, "ts")
+
+    async def _download_segment(self, segment_uri: str) -> str:
+        tmp = generate_temp_path(segment_uri)
+        async with self.session.get(segment_uri, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            resp.raise_for_status()
+            async with aiofiles.open(tmp, "wb") as file:
+                content = await resp.content.read()
+                await file.write(content)
+        return tmp
+
+    async def size(self) -> int:
+        try:
+            async with self.session.get(self.url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                content = await resp.text("utf-8")
+            parsed_m3u = m3u8.loads(content, uri=self.url)
+            if parsed_m3u.playlists:
+                playlists = sorted(parsed_m3u.playlists, key=lambda p: p.stream_info.bandwidth, reverse=True)
+                async with self.session.get(playlists[0].absolute_uri, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    content = await resp.text("utf-8")
+                parsed_m3u = m3u8.loads(content, uri=playlists[0].absolute_uri)
+            self._size = len(parsed_m3u.segments)
+            return self._size
+        except:
+            return 100
+
+
+async def concat_video_files(paths: list[str], out: str, ext: str, max_files_open=128):
+    """Concatenate video files using FFmpeg with copy codec."""
+    if shutil.which("ffmpeg") is None:
+        raise Exception("FFmpeg must be installed.")
+
+    # Base case
+    if len(paths) == 1:
+        shutil.move(paths[0], out)
+        return
+
+    it = iter(paths)
+    num_batches = len(paths) // max_files_open + (
+        1 if len(paths) % max_files_open != 0 else 0
+    )
+    tempdir = tempfile.gettempdir()
+    outpaths = [
+        os.path.join(
+            tempdir,
+            f"__streamrip_ffmpeg_vid_{hash(paths[i*max_files_open])}.{ext}",
+        )
+        for i in range(num_batches)
+    ]
+
+    for p in outpaths:
+        try: os.remove(p)
+        except FileNotFoundError: pass
+
+    proc_futures = []
+    for i in range(num_batches):
+        command = (
+            "ffmpeg",
+            "-y",
+            "-i",
+            f"concat:{'|'.join(itertools.islice(it, max_files_open))}",
+            "-c",
+            "copy",
+            "-loglevel",
+            "warning",
+            outpaths[i],
+        )
+        fut = asyncio.create_subprocess_exec(*command, stderr=asyncio.subprocess.PIPE)
+        proc_futures.append(fut)
+
+    # Create all processes concurrently
+    processes = await asyncio.gather(*proc_futures)
+
+    # wait for all of them to finish
+    await asyncio.gather(*[p.communicate() for p in processes])
+    for proc in processes:
+        if proc.returncode != 0:
+            raise Exception(
+                f"FFMPEG returned with status code {proc.returncode} error: {proc.stderr} output: {proc.stdout}",
+            )
+
+    # Recurse on remaining batches
+    await concat_video_files(outpaths, out, ext)

@@ -16,6 +16,9 @@ from .artwork import download_artwork
 from .media import Media, Pending
 from .track import PendingTrack
 
+# --- CORRECCIÓN: Importación que faltaba ---
+from ..console import console
+
 logger = logging.getLogger("streamrip")
 
 
@@ -60,6 +63,9 @@ class Album(Media):
 
     async def postprocess(self):
         progress.remove_title(self.meta.album)
+        # --- MENSAJE RESUMEN (Ahora sí funciona) ---
+        console.print(f"\n[bold cyan]📀 {self.meta.album}[/bold cyan]")
+        console.print(f"[dim]   Artist: {self.meta.albumartist}[/dim]")
 
 
 @dataclass(slots=True)

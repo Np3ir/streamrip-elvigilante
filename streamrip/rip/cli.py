@@ -132,7 +132,7 @@ def rip(
         c = Config(config_path)
     except Exception as e:
         console.print(
-            f"Error loading config from [bold cyan]{config_path}[/bold cyan]: {e}\n"
+            f"[red]Error loading config from[/red] [bold cyan]{config_path}[/bold cyan]: {e}\n"
             "Try running [bold]rip config reset[/bold]",
         )
         ctx.obj["config"] = None

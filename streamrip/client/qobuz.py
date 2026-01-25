@@ -148,9 +148,8 @@ class QobuzClient(Client):
     def __init__(self, config: Config):
         self.logged_in = False
         self.config = config
-        self.rate_limiter = self.get_rate_limiter(
-            config.session.downloads.requests_per_minute,
-        )
+        rpm = config.session.downloads.requests_per_minute
+        self.rate_limiter = self.get_rate_limiter(rpm if rpm > 0 else 60)
         self.secret: Optional[str] = None
 
     async def login(self):

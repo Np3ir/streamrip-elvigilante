@@ -9,6 +9,7 @@ from rich.live import Live
 from rich.progress import (
     BarColumn,
     Progress,
+    SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
     TimeRemainingColumn,
@@ -16,6 +17,7 @@ from rich.progress import (
 )
 from rich.rule import Rule
 from rich.text import Text
+from rich.logging import RichHandler
 
 from .console import console
 
@@ -27,12 +29,40 @@ def _now() -> float:
 
 
 # ============================================================
-# GLOBAL BUFFER so we can count BEFORE ProgressManager exists
+# LOGGING INTEGRATION
+# ============================================================
+def _setup_rich_logging():
+    root_logger = logging.getLogger("streamrip")
+    
+    # Limpiamos handlers viejos
+    for h in root_logger.handlers[:]:
+        root_logger.removeHandler(h)
+    
+    # Configuramos el handler bonito (Rich)
+    rh = RichHandler(
+        console=console, 
+        show_time=True, 
+        show_path=False, 
+        markup=True,
+        rich_tracebacks=True
+    )
+    root_logger.addHandler(rh)
+    root_logger.setLevel(logging.INFO)
+    
+    # --- FIX: EVITAR DUPLICADOS ---
+    # Esto evita que el mensaje suba al sistema base de Python
+    root_logger.propagate = False 
+
+_setup_rich_logging()
+
+
+# ============================================================
+# GLOBAL BUFFER
 # ============================================================
 
 _PM_REF: Optional["ProgressManager"] = None
-_PENDING_ALBUM: Dict[str, Tuple[int, int, int]] = {}   # album -> (reg, exists, redl)
-_PENDING_GLOBAL: Dict[str, int] = {}                   # label -> count
+_PENDING_ALBUM: Dict[str, Tuple[int, int, int]] = {}
+_PENDING_GLOBAL: Dict[str, int] = {}
 
 
 def _pending_bump_album(album: str, kind: str) -> None:
@@ -53,100 +83,10 @@ def _pending_bump_global(label: str) -> None:
 
 
 # ============================================================
-# EARLY FILTER (installed at import-time)
-# - Suppresses spam even before Live starts
-# - Buffers counts until ProgressManager exists
+# PROGRESS MANAGER
 # ============================================================
-
-class _EarlyStreamripNoiseFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage() or ""
-
-            # Once PM exists, let PM filter handle counting/suppressing
-            if _PM_REF is not None:
-                return True
-
-            # BEFORE PM exists: suppress + buffer (album unknown at this stage)
-            if record.levelno >= logging.WARNING:
-                if "Track in database but file missing" in msg:
-                    _pending_bump_album("Unknown album", "redownloaded")
-                    return False
-                if "Rate Limit hit" in msg or "Rate limit hit" in msg:
-                    _pending_bump_global("⏳ Rate limit backoff")
-                    return False
-
-            if record.levelno == logging.INFO:
-                if "Track already exists and registered" in msg:
-                    _pending_bump_album("Unknown album", "already")
-                    return False
-                if "Track exists on disk but not in database" in msg:
-                    _pending_bump_album("Unknown album", "registered")
-                    return False
-
-        except Exception:
-            return True
-
-        return True
-
-
-def _install_early_filter():
-    try:
-        target_logger = logging.getLogger("streamrip")
-        for f in list(getattr(target_logger, "filters", [])):
-            if isinstance(f, _EarlyStreamripNoiseFilter):
-                return
-        target_logger.addFilter(_EarlyStreamripNoiseFilter())
-    except Exception:
-        pass
-
-
-_install_early_filter()
-
-
-# ============================================================
-# MAIN FILTER (Live-time): suppress + count per current album
-# ============================================================
-
-class _StreamripNoiseFilter(logging.Filter):
-    def __init__(self, pm: "ProgressManager"):
-        super().__init__()
-        self.pm = pm
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage() or ""
-
-            if record.levelno >= logging.WARNING:
-                if "Track in database but file missing" in msg:
-                    self.pm.bump_album("redownloaded")
-                    return False
-                if "Rate Limit hit" in msg or "Rate limit hit" in msg:
-                    self.pm.bump_global("⏳ Rate limit backoff")
-                    return False
-
-            if record.levelno == logging.INFO:
-                if "Track already exists and registered" in msg:
-                    self.pm.bump_album("already")
-                    return False
-                if "Track exists on disk but not in database" in msg:
-                    self.pm.bump_album("registered")
-                    return False
-
-        except Exception:
-            return True
-
-        return True
-
 
 class ProgressManager:
-    """
-    - Keeps download bars
-    - Shows summary lines above bars (per album + global)
-    - Auto-removes finished bars
-    - Adds "heartbeat": Active downloads + Last activity seconds
-    """
-
     def __init__(self):
         global _PM_REF
 
@@ -163,18 +103,15 @@ class ProgressManager:
 
         self._stats_last_update = 0.0
         self._stats_refresh_interval = 0.25
-
-        # Heartbeat
         self._last_activity = _now()
 
+        # --- PROGRESS BARS (Cyan/TiDDL Style) ---
         self.progress = Progress(
-            TextColumn("{task.description}"),
-            BarColumn(bar_width=None),
-            TaskProgressColumn(text_format="{task.percentage:>3.0f}%"),
-            TextColumn("•", style="dim"),
+            SpinnerColumn(style="bold cyan"),
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(bar_width=None, style="dim cyan", complete_style="bold cyan", finished_style="bold green"),
             TransferSpeedColumn(),
-            TextColumn("•", style="dim"),
-            TimeRemainingColumn(),
+            "[progress.percentage]{task.percentage:>3.0f}%",
             console=console,
         )
 
@@ -186,19 +123,15 @@ class ProgressManager:
             refresh_per_second=10,
             transient=True,
             auto_refresh=True,
+            redirect_stdout=False,
+            redirect_stderr=False,
         )
 
         self._last_task_update: dict[int, float] = {}
         self._min_update_interval = 0.04
 
-        # Set global ref so early filter stops buffering forever
         _PM_REF = self
-
-        # Merge any buffered counts from before PM existed
         self._merge_pending()
-
-        # Install the main counting/suppressing filter
-        self._install_log_filter()
 
     def _merge_pending(self):
         try:
@@ -214,16 +147,6 @@ class ProgressManager:
         except Exception:
             pass
 
-    def _install_log_filter(self):
-        try:
-            target_logger = logging.getLogger("streamrip")
-            for f in list(getattr(target_logger, "filters", [])):
-                if isinstance(f, _StreamripNoiseFilter):
-                    return
-            target_logger.addFilter(_StreamripNoiseFilter(self))
-        except Exception as e:
-            logger.debug(f"Failed to install log filter: {e}")
-
     def _touch(self):
         self._last_activity = _now()
 
@@ -234,15 +157,12 @@ class ProgressManager:
 
     def _renderable(self):
         blocks = []
-
         rule = self._gen_title_rule()
         if rule is not None:
             blocks.append(rule)
-
         stats_block = self._gen_stats_block()
         if stats_block is not None:
             blocks.append(stats_block)
-
         blocks.append(self.progress)
         return Group(*blocks)
 
@@ -253,8 +173,6 @@ class ProgressManager:
         except Exception:
             pass
 
-    # ---------- counters ----------
-
     def _album_key(self) -> str:
         if self._current_album:
             return self._current_album
@@ -264,7 +182,6 @@ class ProgressManager:
 
     def bump_album(self, kind: str):
         album = self._truncate(self._album_key().strip(), 48)
-
         with self._lock:
             r, a, rd = self.album_stats.get(album, (0, 0, 0))
             if kind == "registered":
@@ -275,7 +192,6 @@ class ProgressManager:
                 rd += 1
             self.album_stats[album] = (r, a, rd)
             self.album_last_touch[album] = _now()
-
         self._touch()
         self._maybe_refresh_stats()
 
@@ -294,27 +210,21 @@ class ProgressManager:
 
     def _gen_stats_block(self) -> Optional[Group]:
         lines = []
-
-        # Heartbeat line (always shown once Live is running)
         active = len(getattr(self.progress, "tasks", []))
-        since = int(_now() - self._last_activity)
         if active > 0:
-            lines.append(Text(f"🟢 Active downloads: {active}  •  Last activity: {since}s ago", style="green"))
+            lines.append(Text(f"🔵 Active downloads: {active}", style="bold cyan"))
         else:
-            lines.append(Text(f"🟡 Waiting for downloads…  •  Last activity: {since}s ago", style="yellow"))
+            lines.append(Text("⚪ Waiting for downloads…", style="dim white"))
 
-        # Global summary (top event)
         if self.global_stats:
             label, count = sorted(self.global_stats.items(), key=lambda kv: kv[1], reverse=True)[0]
             suffix = f" (x{count})" if count > 1 else ""
             lines.append(Text(f"{label}{suffix}", style="yellow"))
 
-        # Album summary (up to 2)
         if self.album_stats:
             current = self._truncate((self._current_album or "").strip(), 48) or None
             albums_sorted = sorted(self.album_last_touch.items(), key=lambda kv: kv[1], reverse=True)
             recent = [name for name, _t in albums_sorted]
-
             shown = []
             if current and current in self.album_stats:
                 shown.append(current)
@@ -323,34 +233,29 @@ class ProgressManager:
                     shown.append(name)
                 if len(shown) >= 2:
                     break
-
             for album in shown:
                 r, a, rd = self.album_stats.get(album, (0, 0, 0))
                 parts = [f"reg {r}", f"exists {a}"]
                 if rd:
                     parts.append(f"redl {rd}")
-                style = "yellow" if rd else "cyan"
+                style = "yellow" if rd else "cyan" 
                 lines.append(Text(f"📀 {album} → " + " • ".join(parts), style=style))
-
             if len(self.album_stats) > len(shown):
                 lines.append(Text("…more albums counted (hidden)", style="dim"))
 
         return Group(*lines) if lines else None
 
-    # ---------- public API ----------
-
     def get_callback(self, total: int, desc: str):
         desc = self._truncate((desc or "").strip() or "Downloading...", 52)
-
         with self._lock:
             if not self.started:
                 try:
-                    self.live.update(self._renderable(), refresh=True)
                     self.live.start()
                     self.started = True
                 except Exception:
                     pass
 
+        # Add task with cyan coloring implied by initialization
         task_id = self.progress.add_task(desc, total=total)
         self._touch()
         self._update_live(force=False)
@@ -362,18 +267,22 @@ class ProgressManager:
                 if now - last < self._min_update_interval:
                     return
                 self._last_task_update[task_id] = now
-
                 self.progress.update(task_id, advance=x)
                 self._touch()
-
-                # auto-remove finished tasks
-                t = self.progress.get_task(task_id)
-                if t.total is not None and t.completed >= t.total:
+                
+                # --- FIX: SAFE TASK LOOKUP (No get_task) ---
+                task_completed = False
+                for t in self.progress.tasks:
+                    if t.id == task_id:
+                        if t.total is not None and t.completed >= t.total:
+                            task_completed = True
+                        break
+                
+                if task_completed:
                     self.progress.remove_task(task_id)
                     self._last_task_update.pop(task_id, None)
                     self._touch()
                     self._update_live(force=False)
-
             except Exception:
                 pass
 
@@ -391,7 +300,7 @@ class ProgressManager:
     def cleanup(self):
         global _PM_REF
         with self._lock:
-            if self.started:
+            if self.started and not self.progress.tasks:
                 try:
                     self.live.stop()
                 except Exception:
@@ -401,21 +310,16 @@ class ProgressManager:
                     self._last_task_update.clear()
                     self.task_titles.clear()
                     self._current_album = None
-                    self.album_stats.clear()
-                    self.album_last_touch.clear()
-                    self.global_stats.clear()
                     _PM_REF = None
 
     def add_title(self, title: str):
         title = (title or "").strip()
         if not title:
             return
-
         with self._lock:
             if title not in self.task_titles:
                 self.task_titles.append(title)
             self._current_album = title
-
         self._touch()
         self._update_live(force=False)
 
@@ -423,26 +327,28 @@ class ProgressManager:
         title = (title or "").strip()
         if not title:
             return
-
         with self._lock:
             if title in self.task_titles:
                 self.task_titles.remove(title)
             if self._current_album == title:
                 self._current_album = self.task_titles[-1] if self.task_titles else None
-
         self._touch()
         self._update_live(force=False)
 
     def _gen_title_rule(self):
         if not self.task_titles:
             return None
-
         shown = [self._truncate(t, 34) for t in self.task_titles[:2]]
         titles = ", ".join(shown)
         if len(self.task_titles) > 2:
             titles += "..."
+        # Rule line in Cyan
+        return Rule(self.prefix + Text(titles), style="cyan")
 
-        return Rule(self.prefix + Text(titles))
+
+# --- BACKWARD COMPATIBILITY FUNCTION ---
+def print_skipped(name: str, reason: str):
+    console.print(f"[yellow]Skipped ({reason})[/]: {name}")
 
 
 @dataclass(slots=True)

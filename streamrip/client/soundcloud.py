@@ -31,9 +31,8 @@ class SoundcloudClient(Client):
     def __init__(self, config: Config):
         self.global_config = config
         self.config = config.session.soundcloud
-        self.rate_limiter = self.get_rate_limiter(
-            config.session.downloads.requests_per_minute,
-        )
+        rpm = config.session.downloads.requests_per_minute
+        self.rate_limiter = self.get_rate_limiter(rpm if rpm > 0 else 60)
 
     async def login(self):
         self.session = await self.get_session(

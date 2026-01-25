@@ -10,6 +10,8 @@ from .playlist import (
     Playlist,
 )
 from .track import PendingSingle, PendingTrack, Track
+from .user import PendingUser, User
+from .video import Video, PendingVideo
 
 __all__ = [
     "Media",
@@ -28,4 +30,8 @@ __all__ = [
     "PendingPlaylistTrack",
     "PendingSingle",
     "remove_artwork_tempdirs",
+    "PendingUser",
+    "User",
+    "Video",
+    "PendingVideo",
 ]
