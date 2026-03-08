@@ -1,6 +1,32 @@
-# Streamrip (TiDDL Edition)
+# Streamrip — ElVigilante Edition
 
-A powerful, scriptable music and video downloader for Qobuz, Tidal, Deezer, and SoundCloud, featuring the new TiDDL styling.
+> Fork of [nathom/streamrip](https://github.com/nathom/streamrip) — enhanced reliability, security, and configurable retries.
+
+A powerful, scriptable music and video downloader for Qobuz, Tidal, Deezer, and SoundCloud, featuring TiDDL-style colored output.
+
+## What's new in this fork
+
+| Improvement | Details |
+|---|---|
+| **Tidal credentials via env vars** | `TIDAL_CLIENT_ID` / `TIDAL_CLIENT_SECRET` instead of hardcoded values |
+| **Configurable retries** | `max_retries` and `retry_delay` in `config.toml` |
+| **Exponential backoff** | Retry waits: 2 s → 4 s → 8 s … |
+| **Proper exceptions** | `assert` replaced by `ValueError` / `KeyError` |
+| **Semaphore safety** | Conflicting concurrency settings log a warning instead of crashing |
+
+## Installation
+
+```bash
+pip install git+https://github.com/Np3ir/streamrip-elvigilante
+```
+
+Or with Poetry (development):
+
+```bash
+git clone https://github.com/Np3ir/streamrip-elvigilante
+cd streamrip-elvigilante
+poetry install
+```
 
 ## Features
 

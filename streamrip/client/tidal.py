@@ -8,6 +8,8 @@ import time
 from datetime import datetime
 from json import JSONDecodeError
 
+import os
+
 import aiohttp
 from aiohttp import TCPConnector, CookieJar, ClientSession, ClientTimeout
 
@@ -22,8 +24,10 @@ API_BASE = "https://api.tidal.com/v1"
 VIDEO_BASE = "https://api.tidalhifi.com/v1"
 AUTH_URL = "https://auth.tidal.com/v1/oauth2"
 
-CLIENT_ID = "4N3n6Q1x95LL5K7p"
-CLIENT_SECRET = "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik="
+_DEFAULT_CLIENT_ID = "4N3n6Q1x95LL5K7p"
+_DEFAULT_CLIENT_SECRET = "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik="
+CLIENT_ID = os.environ.get("TIDAL_CLIENT_ID", _DEFAULT_CLIENT_ID)
+CLIENT_SECRET = os.environ.get("TIDAL_CLIENT_SECRET", _DEFAULT_CLIENT_SECRET)
 
 AUTH = aiohttp.BasicAuth(login=CLIENT_ID, password=CLIENT_SECRET)
 

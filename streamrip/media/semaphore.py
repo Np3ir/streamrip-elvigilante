@@ -1,7 +1,10 @@
 import asyncio
+import logging
 from contextlib import nullcontext
 
 from ..config import DownloadsConfig
+
+logger = logging.getLogger("streamrip")
 
 _unlimited = nullcontext()
 _global_semaphore: None | tuple[int, asyncio.Semaphore] = None
@@ -33,8 +36,12 @@ def global_download_semaphore(c: DownloadsConfig) -> asyncio.Semaphore | nullcon
     if _global_semaphore is None:
         _global_semaphore = (max_connections, asyncio.Semaphore(max_connections))
 
-    assert (
-        max_connections == _global_semaphore[0]
-    ), f"Already have other global semaphore {_global_semaphore}"
+    if max_connections != _global_semaphore[0]:
+        logger.warning(
+            "Global semaphore already created with max_connections=%d; "
+            "ignoring new value %d.",
+            _global_semaphore[0],
+            max_connections,
+        )
 
     return _global_semaphore[1]

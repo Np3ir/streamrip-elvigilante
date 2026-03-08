@@ -1,13 +1,13 @@
 [tool.poetry]
-name = "streamrip"
-version = "2.2.0"
-description = "A fast, all-in-one music downloader for Qobuz, Deezer, Tidal, and SoundCloud"
-authors = ["nathom <nathanthomas707@gmail.com>"]
+name = "streamrip-elvigilante"
+version = "2.2.1"
+description = "A fast, all-in-one music downloader for Qobuz, Deezer, Tidal, and SoundCloud — ElVigilante fork"
+authors = ["nathom <nathanthomas707@gmail.com>", "djelvigilante <Np3irpr@gmail.com>"]
 license = "GPL-3.0-only"
 readme = "README.md"
-homepage = "https://github.com/nathom/streamrip"
-repository = "https://github.com/nathom/streamrip"
-include = ["src/config.toml"]
+homepage = "https://github.com/Np3ir/streamrip-elvigilante"
+repository = "https://github.com/Np3ir/streamrip-elvigilante"
+include = ["streamrip/config.toml"]
 keywords = ["hi-res", "free", "music", "download"]
 classifiers = [
   "License :: OSI Approved :: GNU General Public License (GPL)",

@@ -20,6 +20,10 @@ requests_per_minute = 60
 # Verify SSL certificates for API connections
 # Set to false if you encounter SSL certificate verification errors (not recommended)
 verify_ssl = true
+# Maximum number of download retry attempts per track (0 = no retries)
+max_retries = 3
+# Seconds to wait before first retry; doubles with each subsequent attempt (exponential backoff)
+retry_delay = 2.0
 
 [qobuz]
 # 1: 320kbps MP3, 2: 16/44.1, 3: 24/<=96, 4: 24/>=96

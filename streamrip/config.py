@@ -129,8 +129,9 @@ class DownloadsConfig:
     max_connections: int
     requests_per_minute: int
     verify_ssl: bool
-    # --- MODIFICACIÓN: AÑADIDO CAMPO PERSONALIZADO ---
-    playlist_folder: str = ""  # Por defecto vacío
+    playlist_folder: str = ""
+    max_retries: int = 3
+    retry_delay: float = 2.0
 
 
 @dataclass(slots=True)
@@ -197,13 +198,14 @@ class ConfigData:
                 f"Need to update config from {v} to {CURRENT_CONFIG_VERSION}",
             )
 
-        # --- MODIFICACIÓN: Inyectar playlist_folder si no existe ---
         dl_data = toml["downloads"]
         if "playlist_folder" not in dl_data:
-            dl_data["playlist_folder"] = ""  # Valor por defecto seguro
-        
+            dl_data["playlist_folder"] = ""
+        if "max_retries" not in dl_data:
+            dl_data["max_retries"] = 3
+        if "retry_delay" not in dl_data:
+            dl_data["retry_delay"] = 2.0
         downloads = DownloadsConfig(**dl_data)  # type: ignore
-        # -----------------------------------------------------------
 
         qobuz = QobuzConfig(**toml["qobuz"])  # type: ignore
         tidal = TidalConfig(**toml["tidal"])  # type: ignore
