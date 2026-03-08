@@ -24,10 +24,24 @@ API_BASE = "https://api.tidal.com/v1"
 VIDEO_BASE = "https://api.tidalhifi.com/v1"
 AUTH_URL = "https://auth.tidal.com/v1/oauth2"
 
-_DEFAULT_CLIENT_ID = "4N3n6Q1x95LL5K7p"
-_DEFAULT_CLIENT_SECRET = "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik="
-CLIENT_ID = os.environ.get("TIDAL_CLIENT_ID", _DEFAULT_CLIENT_ID)
-CLIENT_SECRET = os.environ.get("TIDAL_CLIENT_SECRET", _DEFAULT_CLIENT_SECRET)
+# Tidal credentials via environment variables.
+# Set TIDAL_CLIENT_ID and TIDAL_CLIENT_SECRET to use your own app credentials:
+#   export TIDAL_CLIENT_ID=your_id
+#   export TIDAL_CLIENT_SECRET=your_secret
+_BUNDLED_CLIENT_ID = "4N3n6Q1x95LL5K7p"
+_BUNDLED_CLIENT_SECRET = "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik="
+
+CLIENT_ID = os.environ.get("TIDAL_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("TIDAL_CLIENT_SECRET")
+
+if not CLIENT_ID or not CLIENT_SECRET:
+    logger.warning(
+        "TIDAL_CLIENT_ID / TIDAL_CLIENT_SECRET not set — using bundled default "
+        "credentials. These are publicly known and may be revoked at any time. "
+        "Set the env vars to use your own Tidal app credentials."
+    )
+    CLIENT_ID = CLIENT_ID or _BUNDLED_CLIENT_ID
+    CLIENT_SECRET = CLIENT_SECRET or _BUNDLED_CLIENT_SECRET
 
 AUTH = aiohttp.BasicAuth(login=CLIENT_ID, password=CLIENT_SECRET)
 

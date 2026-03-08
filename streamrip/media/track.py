@@ -4,6 +4,8 @@ import os
 import re
 from dataclasses import dataclass
 
+import aiohttp
+
 from .. import converter
 from ..client import Client, Downloadable
 from ..config import Config
@@ -56,8 +58,13 @@ class Track(Media):
         if os.path.isfile(self.download_path): return
 
         dl_cfg = self.config.session.downloads
-        max_retries = getattr(dl_cfg, "max_retries", 3)
+        # max_retries controls *additional* attempts beyond the first;
+        # the loop runs for attempt in 1..max_retries+1 (inclusive),
+        # and attempt max_retries+1 is reserved for the final-failure log.
+        max_retries = max(0, getattr(dl_cfg, "max_retries", 3))
         retry_delay = getattr(dl_cfg, "retry_delay", 2.0)
+        # Cap the per-attempt wait so high max_retries don't cause multi-minute hangs
+        max_wait = getattr(dl_cfg, "max_wait", 60.0)
 
         async with global_download_semaphore(dl_cfg):
             display_title = self.meta.title
@@ -69,13 +76,22 @@ class Track(Media):
                     with handle as update_fn:
                         await self.downloadable.download(self.download_path, update_fn)
                     return
-                except Exception as e:
+                except asyncio.CancelledError:
+                    # Propagate cancellations so higher-level logic can abort cleanly
+                    raise
+                except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as e:
                     if attempt <= max_retries:
-                        wait = retry_delay * (2 ** (attempt - 1))
-                        logger.warning(f"Error downloading '{self.meta.title}': {e}. Retrying in {wait:.1f}s...")
+                        wait = min(max_wait, retry_delay * (2 ** (attempt - 1)))
+                        logger.warning(
+                            "Error downloading '%s' (attempt %d/%d): %s. Retrying in %.1fs...",
+                            display_title, attempt, max_retries, e, wait,
+                        )
                         await asyncio.sleep(wait)
                     else:
-                        logger.error(f"Persistent error downloading '{self.meta.title}': {e}")
+                        logger.exception(
+                            "Persistent error downloading '%s' after %d retries.",
+                            display_title, max_retries,
+                        )
                         self.db.set_failed(self.downloadable.source, "track", self.meta.info.id)
 
     async def postprocess(self):

@@ -37,6 +37,7 @@ class TestGlobalDownloadSemaphore:
     def test_returns_semaphore_with_value_1_when_disabled(self):
         result = global_download_semaphore(_make_config(concurrency=False))
         assert isinstance(result, asyncio.Semaphore)
+        assert result._value == 1  # disabled concurrency must use a single-slot semaphore
 
     def test_negative_max_connections_returns_unlimited(self):
         result = global_download_semaphore(_make_config(concurrency=True, max_connections=-1))
