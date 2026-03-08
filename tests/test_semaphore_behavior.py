@@ -34,17 +34,16 @@ class TestGlobalDownloadSemaphore:
         result = global_download_semaphore(_make_config(concurrency=True, max_connections=4))
         assert isinstance(result, asyncio.Semaphore)
 
-    def test_returns_semaphore_with_value_1_when_disabled(self):
+    @pytest.mark.asyncio
+    async def test_returns_semaphore_with_value_1_when_disabled(self):
         result = global_download_semaphore(_make_config(concurrency=False))
         assert isinstance(result, asyncio.Semaphore)
         # Verify single-slot behavior without relying on the private _value attribute:
         # the semaphore starts unlocked (1 slot free), and is locked after acquiring it.
-        async def _check():
-            assert not result.locked(), "Single-slot semaphore should start unlocked"
-            await result.acquire()
-            assert result.locked(), "After acquiring the one slot, semaphore must be locked"
-            result.release()
-        asyncio.run(_check())
+        assert not result.locked(), "Single-slot semaphore should start unlocked"
+        await result.acquire()
+        assert result.locked(), "After acquiring the one slot, semaphore must be locked"
+        result.release()
 
     def test_negative_max_connections_returns_unlimited(self):
         result = global_download_semaphore(_make_config(concurrency=True, max_connections=-1))

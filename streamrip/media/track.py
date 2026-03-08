@@ -49,6 +49,10 @@ class Track(Media):
         # Only postprocess if the file was actually downloaded; download() may return
         # silently after exhausting all retries without creating the file.
         if not os.path.isfile(self.download_path):
+            logger.warning(
+                "Track '%s' was not downloaded after all retries; skipping post-processing.",
+                self.meta.title,
+            )
             return
         await self.postprocess()
 

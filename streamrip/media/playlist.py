@@ -34,6 +34,24 @@ from .track import Track
 logger = logging.getLogger("streamrip")
 
 
+def _resolve_track_folder(
+    playlist_folder: str,
+    album_title: str,
+    set_playlist_to_album: bool,
+    restrict_chars: bool,
+) -> str:
+    """Return the folder where a playlist track should be saved.
+
+    When *set_playlist_to_album* is ``True`` the playlist IS the album, so
+    tracks go directly in *playlist_folder* (creating a subfolder would double
+    the name).  Otherwise tracks are grouped under their original album name.
+    """
+    if set_playlist_to_album:
+        return playlist_folder
+    safe_album_name = clean_filename(album_title, restrict=restrict_chars)
+    return os.path.join(playlist_folder, safe_album_name)
+
+
 def _get_custom_playlist_folder() -> str | None:
     possible_paths = [
         Path(os.environ.get("APPDATA", "")) / "streamrip" / "config.toml",
@@ -104,16 +122,12 @@ class PendingPlaylistTrack(Pending):
 
         # --- CARPETA POR ÁLBUM ---
         restrict_chars = self.config.session.filepaths.restrict_characters
-        if c.set_playlist_to_album:
-            # All tracks go directly in the playlist folder — no album subfolder,
-            # because the playlist IS the album and self.folder is already named
-            # after the playlist. Creating playlist_name/playlist_name/ would double it.
-            track_folder = self.folder
-        else:
-            # Group tracks by their original album name
-            # meta.album is AlbumMetadata; .album is the album title string
-            safe_album_name = clean_filename(meta.album.album, restrict=restrict_chars)
-            track_folder = os.path.join(self.folder, safe_album_name)
+        track_folder = _resolve_track_folder(
+            self.folder,
+            meta.album.album,
+            c.set_playlist_to_album,
+            restrict_chars,
+        )
         os.makedirs(track_folder, exist_ok=True)
 
         # --- LIMPIEZA DE NOMBRES UNIFICADA ---

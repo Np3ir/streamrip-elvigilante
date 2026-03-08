@@ -219,6 +219,10 @@ class ConfigData:
                     retries_val,
                 )
                 dl_data["max_retries"] = 0
+            else:
+                # Always normalise to int so downstream code never sees a
+                # string-typed value from TOML (e.g. "3" instead of 3).
+                dl_data["max_retries"] = retries_val
         except (TypeError, ValueError):
             logger.warning(
                 "max_retries has an invalid value (%r); resetting to 0.",
