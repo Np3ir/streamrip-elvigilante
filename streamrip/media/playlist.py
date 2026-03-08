@@ -104,7 +104,8 @@ class PendingPlaylistTrack(Pending):
 
         # --- CARPETA POR ÁLBUM ---
         restrict_chars = self.config.session.filepaths.restrict_characters
-        safe_album_name = clean_filename(meta.album, restrict=restrict_chars)
+        # meta.album is AlbumMetadata; .album is the album title string
+        safe_album_name = clean_filename(meta.album.album, restrict=restrict_chars)
         track_folder = os.path.join(self.folder, safe_album_name)
         os.makedirs(track_folder, exist_ok=True)
 
