@@ -46,6 +46,10 @@ class Track(Media):
             return
 
         await self.download()
+        # Only postprocess if the file was actually downloaded; download() may return
+        # silently after exhausting all retries without creating the file.
+        if not os.path.isfile(self.download_path):
+            return
         await self.postprocess()
 
     async def preprocess(self):

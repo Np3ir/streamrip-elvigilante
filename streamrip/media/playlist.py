@@ -104,9 +104,16 @@ class PendingPlaylistTrack(Pending):
 
         # --- CARPETA POR ÁLBUM ---
         restrict_chars = self.config.session.filepaths.restrict_characters
-        # meta.album is AlbumMetadata; .album is the album title string
-        safe_album_name = clean_filename(meta.album.album, restrict=restrict_chars)
-        track_folder = os.path.join(self.folder, safe_album_name)
+        if c.set_playlist_to_album:
+            # All tracks go directly in the playlist folder — no album subfolder,
+            # because the playlist IS the album and self.folder is already named
+            # after the playlist. Creating playlist_name/playlist_name/ would double it.
+            track_folder = self.folder
+        else:
+            # Group tracks by their original album name
+            # meta.album is AlbumMetadata; .album is the album title string
+            safe_album_name = clean_filename(meta.album.album, restrict=restrict_chars)
+            track_folder = os.path.join(self.folder, safe_album_name)
         os.makedirs(track_folder, exist_ok=True)
 
         # --- LIMPIEZA DE NOMBRES UNIFICADA ---
