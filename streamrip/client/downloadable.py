@@ -44,19 +44,33 @@ async def fast_async_download(path, url, headers, callback, session: aiohttp.Cli
     chunk_size: int = 2**17  # 131 KB
     
     async def _do_download(client_session: aiohttp.ClientSession):
-        # Merge headers if provided, but session might already have them
-        # If headers are provided, we should use them for the request
         req_headers = headers if headers else None
-        
-        async with client_session.get(url, headers=req_headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+        # Use sock_connect/sock_read instead of total so large FLAC files don't
+        # spuriously timeout. total=60 fires even when data is flowing normally.
+        async with client_session.get(
+            url,
+            headers=req_headers,
+            allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60),
+        ) as resp:
             resp.raise_for_status()
-            with open(path, "wb") as file:
-                while True:
-                    chunk = await resp.content.read(chunk_size)
-                    if not chunk:
-                        break
-                    file.write(chunk)
-                    callback(len(chunk))
+            try:
+                with open(path, "wb") as file:
+                    while True:
+                        chunk = await resp.content.read(chunk_size)
+                        if not chunk:
+                            break
+                        file.write(chunk)
+                        callback(len(chunk))
+            except Exception:
+                # Remove the partial file so postprocess() is not called on
+                # corrupt/incomplete data (rip() guards on file existence).
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+                raise
 
     if session:
         await _do_download(session)

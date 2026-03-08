@@ -6,7 +6,7 @@ from rich.style import Style
 console = Console()
 
 def print_banner():
-    banner_text = """
+    banner_text = r"""
   _______ _   _  _____   _____  _
  |__   __| | | ||  __ \ |  __ \| |
     | |  | | | || |  | || |  | | |
