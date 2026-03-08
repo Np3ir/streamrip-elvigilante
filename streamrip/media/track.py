@@ -33,6 +33,7 @@ class Track(Media):
     download_path: str = ""
     is_single: bool = False
     from_playlist: bool = False
+    lrc_content: str | None = None
 
     async def rip(self):
         await self.preprocess()
@@ -109,6 +110,15 @@ class Track(Media):
         if self.is_single: remove_title(self.meta.title)
         await tag_file(self.download_path, self.meta, self.cover_path)
         if self.config.session.conversion.enabled: await self._convert()
+        # Save .lrc sidecar file when lyrics were fetched
+        if self.lrc_content:
+            lrc_path = os.path.splitext(self.download_path)[0] + ".lrc"
+            try:
+                with open(lrc_path, "w", encoding="utf-8") as lrc_file:
+                    lrc_file.write(self.lrc_content)
+                logger.debug("Saved LRC: %s", lrc_path)
+            except OSError as e:
+                logger.warning("Could not save LRC file %s: %s", lrc_path, e)
         self.db.set_downloaded(self.meta.info.id)
         console.print(f"[green]Downloaded[/]: {os.path.basename(self.download_path)}")
 
@@ -175,26 +185,34 @@ class PendingTrack(Pending):
         if self.db.downloaded(self.id):
             c = self.config.session.filepaths
             track_path = meta.format_track_path(c.track_format)
-            
+
             # --- USAMOS LA FUNCIÓN CENTRALIZADA ---
             track_path = clean_track_title(track_path, meta.artist)
-            
+
             if meta.info.explicit and "explicit" not in track_path.lower():
                 track_path += " [explicit]"
-            
+
             track_path = clean_filename(track_path, restrict=c.restrict_characters)
             if c.truncate_to > 0: track_path = track_path[:c.truncate_to]
-            
+
             raw_path = os.path.join(track_folder, f"{track_path}.{downloadable.extension}")
             file_path = truncate_filepath_to_max(raw_path)
-            
+
             if os.path.isfile(file_path):
                 console.print(f"[dim]   ↪ Skipped (DB+File): {meta.title}[/dim]")
-                return None 
+                return None
             else:
                 logger.warning(f"[!] Missing file: {os.path.basename(file_path)}")
 
-        return Track(meta, downloadable, self.config, track_folder, self.cover_path, self.db)
+        # Fetch LRC lyrics if enabled and the client supports it
+        lrc_content: str | None = None
+        if self.config.session.lyrics.save_lrc and hasattr(self.client, "get_lyrics"):
+            try:
+                lrc_content = await self.client.get_lyrics(self.id)
+            except Exception as e:
+                logger.debug("Could not fetch lyrics for track %s: %s", self.id, e)
+
+        return Track(meta, downloadable, self.config, track_folder, self.cover_path, self.db, lrc_content=lrc_content)
 
 @dataclass(slots=True)
 class PendingSingle(Pending):
@@ -242,7 +260,16 @@ class PendingSingle(Pending):
             if self.db.downloaded(self.id): logger.warning(f"[!] Re-downloading: {os.path.basename(file_path)}")
             os.makedirs(folder, exist_ok=True)
             embedded_cover_path = await self._download_cover(album.covers, folder)
-            return Track(meta, downloadable, self.config, folder, embedded_cover_path, self.db, is_single=True)
+
+            # Fetch LRC lyrics if enabled and the client supports it
+            lrc_content: str | None = None
+            if config.lyrics.save_lrc and hasattr(self.client, "get_lyrics"):
+                try:
+                    lrc_content = await self.client.get_lyrics(self.id)
+                except Exception as e:
+                    logger.debug("Could not fetch lyrics for single %s: %s", self.id, e)
+
+            return Track(meta, downloadable, self.config, folder, embedded_cover_path, self.db, is_single=True, lrc_content=lrc_content)
 
     def _format_folder(self, meta: AlbumMetadata) -> str:
         c = self.config.session

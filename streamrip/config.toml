@@ -197,8 +197,15 @@ progress_bars = true
 # The maximum number of search results to show in the interactive menu
 max_search_results = 100
 
+[lyrics]
+# Download synced/timed lyrics as a .lrc sidecar file alongside the audio file.
+# The .lrc file will have the same name as the audio file (only the extension changes).
+# Supported: Tidal (timed LRC), Deezer (synced LRC).
+# Qobuz and SoundCloud do not provide lyrics via their API.
+save_lrc = false
+
 [misc]
 # Metadata to identify this config file. Do not change.
 version = "2.0.6"
-# Print a message if a new version of streamrip is available 
+# Print a message if a new version of streamrip is available
 check_for_updates = true

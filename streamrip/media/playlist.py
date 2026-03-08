@@ -181,14 +181,23 @@ class PendingPlaylistTrack(Pending):
             self.db.set_failed(self.client.source, "track", self.id)
             return None
 
+        # Fetch LRC lyrics if enabled and the client supports it
+        lrc_content: str | None = None
+        if self.config.session.lyrics.save_lrc and hasattr(self.client, "get_lyrics"):
+            try:
+                lrc_content = await self.client.get_lyrics(self.id)
+            except Exception as e:
+                logger.debug("Could not fetch lyrics for playlist track %s: %s", self.id, e)
+
         return Track(
             meta,
             downloadable,
             self.config,
-            track_folder, 
+            track_folder,
             embedded_cover_path,
             self.db,
-            from_playlist=True
+            from_playlist=True,
+            lrc_content=lrc_content,
         )
 
     async def _download_cover(self, covers: Covers, folder: str) -> str | None:
