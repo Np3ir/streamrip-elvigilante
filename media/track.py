@@ -55,22 +55,27 @@ class Track(Media):
         if not self.download_path: self._set_download_path()
         if os.path.isfile(self.download_path): return
 
-        async with global_download_semaphore(self.config.session.downloads):
+        dl_cfg = self.config.session.downloads
+        max_retries = getattr(dl_cfg, "max_retries", 3)
+        retry_delay = getattr(dl_cfg, "retry_delay", 2.0)
+
+        async with global_download_semaphore(dl_cfg):
             display_title = self.meta.title
-            for attempt in range(1, 3): 
+            for attempt in range(1, max_retries + 2):
                 try:
                     size = await self.downloadable.size()
-                    desc = display_title if attempt == 1 else f"{display_title} (retry)"
+                    desc = display_title if attempt == 1 else f"{display_title} (reintento {attempt - 1})"
                     handle = get_progress_callback(self.config.session.cli.progress_bars, size, desc)
                     with handle as update_fn:
                         await self.downloadable.download(self.download_path, update_fn)
                     return
                 except Exception as e:
-                    if attempt == 1:
-                        logger.error(f"Error '{self.meta.title}': {e}. Retrying...")
-                        await asyncio.sleep(1)
+                    if attempt <= max_retries:
+                        wait = retry_delay * (2 ** (attempt - 1))  # backoff exponencial
+                        logger.warning(f"Error '{self.meta.title}' (intento {attempt}/{max_retries}): {e}. Reintentando en {wait:.1f}s...")
+                        await asyncio.sleep(wait)
                     else:
-                        logger.error(f"Persistent error '{self.meta.title}': {e}")
+                        logger.error(f"Error persistente '{self.meta.title}' tras {max_retries} reintentos: {e}")
                         self.db.set_failed(self.downloadable.source, "track", self.meta.info.id)
 
     async def postprocess(self):

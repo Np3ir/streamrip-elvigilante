@@ -28,13 +28,17 @@ def global_download_semaphore(c: DownloadsConfig) -> asyncio.Semaphore | nullcon
         return _unlimited
 
     if max_connections <= 0:
-        raise Exception(f"{max_connections = } too small")
+        raise ValueError(f"max_connections debe ser mayor a 0, recibido: {max_connections}")
 
     if _global_semaphore is None:
         _global_semaphore = (max_connections, asyncio.Semaphore(max_connections))
 
-    assert (
-        max_connections == _global_semaphore[0]
-    ), f"Already have other global semaphore {_global_semaphore}"
+    if max_connections != _global_semaphore[0]:
+        import logging as _logging
+        _logging.getLogger("streamrip").warning(
+            "Ya existe un semáforo global con max_connections=%d; ignorando el nuevo valor %d.",
+            _global_semaphore[0],
+            max_connections,
+        )
 
     return _global_semaphore[1]

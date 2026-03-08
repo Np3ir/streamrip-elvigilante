@@ -2,10 +2,10 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import random
 import re
 import time
-from datetime import datetime
 from json import JSONDecodeError
 
 import aiohttp
@@ -22,8 +22,13 @@ API_BASE = "https://api.tidal.com/v1"
 VIDEO_BASE = "https://api.tidalhifi.com/v1"
 AUTH_URL = "https://auth.tidal.com/v1/oauth2"
 
-CLIENT_ID = "4N3n6Q1x95LL5K7p"
-CLIENT_SECRET = "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik="
+# Leer credenciales desde variables de entorno; si no están definidas, usar los valores por defecto.
+# Para sobreescribir: export TIDAL_CLIENT_ID=... TIDAL_CLIENT_SECRET=...
+_DEFAULT_CLIENT_ID = "4N3n6Q1x95LL5K7p"
+_DEFAULT_CLIENT_SECRET = "oKOXfJW371cX6xaZ0PyhgGNBdNLlBZd4AKKYougMjik="
+
+CLIENT_ID = os.environ.get("TIDAL_CLIENT_ID", _DEFAULT_CLIENT_ID)
+CLIENT_SECRET = os.environ.get("TIDAL_CLIENT_SECRET", _DEFAULT_CLIENT_SECRET)
 
 AUTH = aiohttp.BasicAuth(login=CLIENT_ID, password=CLIENT_SECRET)
 
@@ -187,10 +192,12 @@ class TidalClient(Client):
         params['offset'] = 0
         try:
             resp = await self._api_request(endpoint, params=params, base=API_BASE)
-        except:
+        except Exception as e:
+            logger.debug("Initial fetch failed (%s), retrying without includeContributors: %s", endpoint, e)
             if 'includeContributors' in params:
                 del params['includeContributors']
-                if 'includeContributors' in base_params: del base_params['includeContributors']
+                if 'includeContributors' in base_params:
+                    del base_params['includeContributors']
                 resp = await self._api_request(endpoint, params=params, base=API_BASE)
             else:
                 return []
