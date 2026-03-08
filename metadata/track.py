@@ -74,7 +74,7 @@ class TrackMetadata:
         return truncate_filepath_to_max(full_path)
 
     @classmethod
-    def from_qobuz(cls, album: AlbumMetadata, resp: dict, artist_separator: str = ", ") -> TrackMetadata | None:
+    def from_qobuz(cls, album: AlbumMetadata, resp: dict, artist_separator: str) -> TrackMetadata | None:
         def split_feat_artists(name: str) -> list[str]:
             separators = [" feat. ", " featuring ", " feat ", " ft. ", " ft "]
             for sep in separators:
@@ -202,7 +202,7 @@ class TrackMetadata:
         )
 
     @classmethod
-    def from_tidal(cls, album: AlbumMetadata, resp: dict, artist_separator: str = ", ") -> TrackMetadata | None:
+    def from_tidal(cls, album: AlbumMetadata, resp: dict, artist_separator: str) -> TrackMetadata | None:
         title = typed(resp.get("title", "Unknown Title"), str)
         artist = artist_separator.join(a["name"] for a in resp.get("artists", [])) or "Unknown Artist"
         composer_raw = resp.get("composer")
@@ -247,7 +247,7 @@ class TrackMetadata:
         )
 
     @classmethod
-    def from_deezer(cls, album: AlbumMetadata, resp: dict, artist_separator: str = ", ") -> TrackMetadata | None:
+    def from_deezer(cls, album: AlbumMetadata, resp: dict, artist_separator: str) -> TrackMetadata | None:
         title = typed(resp.get("title", "Unknown Title"), str)
         artist_obj = resp.get("artist", {})
         artist = artist_obj.get("name", "Unknown Artist")

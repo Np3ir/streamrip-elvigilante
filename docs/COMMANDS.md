@@ -1,77 +1,77 @@
-# Referencia de comandos
+# Command reference
 
-Streamrip se usa a través del comando `rip`. Todos los subcomandos y opciones están documentados aquí.
-
----
-
-## Estructura general
-
-```
-rip [OPCIONES GLOBALES] COMANDO [ARGUMENTOS Y OPCIONES DEL COMANDO]
-```
+Streamrip is used through the `rip` command. All sub-commands and options are documented here.
 
 ---
 
-## Opciones globales
+## General structure
 
-Estas opciones están disponibles en **todos** los comandos:
+```
+rip [GLOBAL OPTIONS] COMMAND [COMMAND ARGUMENTS AND OPTIONS]
+```
 
-| Opción | Abreviación | Descripción |
-|--------|-------------|-------------|
-| `--config-path PATH` | — | Ruta a un archivo `config.toml` alternativo. |
-| `--folder PATH` | `-f` | Carpeta de descarga (sobreescribe `downloads.folder` del config). |
-| `--no-db` | `-ndb` | Ignorar la base de datos. Re-descarga aunque el track ya esté registrado. |
-| `--quality 0-4` | `-q` | Calidad máxima (aplica a todas las fuentes simultáneamente). |
-| `--codec CODEC` | `-c` | Convertir archivos descargados. Valores: `ALAC`, `FLAC`, `MP3`, `AAC`, `OGG`. Activa `conversion.enabled = true` temporalmente. |
-| `--no-progress` | — | No mostrar barras de progreso. |
-| `--no-ssl-verify` | — | Desactivar verificación de certificados SSL. Usar si hay errores de certificado. |
-| `--verbose` | `-v` | Modo debug: muestra logs detallados y trazas de error completas. |
-| `--version` | — | Muestra la versión de streamrip instalada. |
-| `--help` | — | Muestra la ayuda del comando. |
+---
+
+## Global options
+
+These options are available on **every** command:
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--config-path PATH` | — | Path to an alternative `config.toml` file. |
+| `--folder PATH` | `-f` | Download folder (overrides `downloads.folder` in the config). |
+| `--no-db` | `-ndb` | Ignore the database. Re-downloads even if the track is already registered. |
+| `--quality 0-4` | `-q` | Maximum quality level (applies to all sources simultaneously). |
+| `--codec CODEC` | `-c` | Convert downloaded files. Values: `ALAC`, `FLAC`, `MP3`, `AAC`, `OGG`. Temporarily enables `conversion.enabled = true`. |
+| `--no-progress` | — | Do not show progress bars. |
+| `--no-ssl-verify` | — | Disable SSL certificate verification. Use when you get certificate errors. |
+| `--verbose` | `-v` | Debug mode: shows detailed logs and full error traces. |
+| `--version` | — | Show the installed version of streamrip. |
+| `--help` | — | Show command help. |
 
 ---
 
 ## `rip url`
 
-Descarga contenido directamente desde una o más URLs.
+Download content directly from one or more URLs.
 
 ```bash
 rip url URL [URL ...]
 ```
 
-### Descripción
+### Description
 
-Acepta URLs de Qobuz, Tidal, Deezer y SoundCloud. El tipo de contenido
-(track, álbum, artista, playlist) se detecta automáticamente desde la URL.
+Accepts URLs from Qobuz, Tidal, Deezer and SoundCloud. The content type
+(track, album, artist, playlist) is detected automatically from the URL.
 
-### Ejemplos
+### Examples
 
 ```bash
-# Un álbum de Tidal
+# A Tidal album
 rip url "https://tidal.com/browse/album/12345678"
 
-# Un track de Qobuz
+# A Qobuz track
 rip url "https://open.qobuz.com/track/abc123"
 
-# Un artista completo de Deezer (descarga toda su discografía)
+# A full Deezer artist (downloads the entire discography)
 rip url "https://www.deezer.com/artist/456"
 
-# Una playlist de SoundCloud
-rip url "https://soundcloud.com/usuario/sets/mi-playlist"
+# A SoundCloud playlist
+rip url "https://soundcloud.com/user/sets/my-playlist"
 
-# Varias URLs en un solo comando
+# Multiple URLs in one command
 rip url "https://tidal.com/browse/album/111" \
         "https://open.qobuz.com/album/222" \
         "https://www.deezer.com/album/333"
 
-# Con opciones globales: calidad 2, sin base de datos, a una carpeta específica
-rip -q 2 -ndb -f /tmp/musica url "https://tidal.com/browse/album/12345678"
+# With global options: quality 2, no database, to a specific folder
+rip -q 2 -ndb -f /tmp/music url "https://tidal.com/browse/album/12345678"
 
-# Convertir a ALAC tras la descarga
+# Convert to ALAC after downloading
 rip -c ALAC url "https://open.qobuz.com/album/abc123"
 ```
 
-### URLs soportadas
+### Supported URLs
 
 **Qobuz**
 
@@ -106,213 +106,213 @@ https://www.deezer.com/playlist/{id}
 **SoundCloud**
 
 ```
-https://soundcloud.com/{usuario}/{track-slug}
-https://soundcloud.com/{usuario}/sets/{playlist-slug}
+https://soundcloud.com/{user}/{track-slug}
+https://soundcloud.com/{user}/sets/{playlist-slug}
 ```
 
 ---
 
 ## `rip file`
 
-Descarga contenido desde URLs o IDs en un archivo de texto o JSON.
+Download content from URLs or IDs listed in a text or JSON file.
 
 ```bash
-rip file RUTA_ARCHIVO
+rip file FILE_PATH
 ```
 
-### Formatos de archivo soportados
+### Supported file formats
 
-**Archivo de texto** (`.txt`) — una URL por línea:
+**Text file** (`.txt`) — one URL per line:
 
 ```
 https://tidal.com/browse/album/12345678
 https://open.qobuz.com/album/abc123
 https://www.deezer.com/album/456789
-# Las líneas vacías y duplicadas se ignoran automáticamente
+# Empty lines and duplicates are ignored automatically
 ```
 
-**Archivo JSON** (`.json`) — lista de objetos con `source`, `media_type` e `id`:
+**JSON file** (`.json`) — list of objects with `source`, `media_type` and `id`:
 
 ```json
 [
   {"source": "qobuz",      "media_type": "album",    "id": "0060254728697"},
   {"source": "tidal",      "media_type": "track",    "id": "12345678"},
-  {"source": "tidal",      "media_type": "playlist",  "id": "uuid-aqui"},
+  {"source": "tidal",      "media_type": "playlist",  "id": "uuid-here"},
   {"source": "deezer",     "media_type": "artist",   "id": "456"},
   {"source": "soundcloud", "media_type": "track",    "id": "track-slug"}
 ]
 ```
 
-Valores válidos para `media_type`: `track`, `album`, `artist`, `playlist`.
+Valid values for `media_type`: `track`, `album`, `artist`, `playlist`.
 
-### Ejemplos
+### Examples
 
 ```bash
-# Archivo de texto con URLs
-rip file lista.txt
+# Text file with URLs
+rip file list.txt
 
-# Archivo JSON con IDs
-rip file descargas.json
+# JSON file with IDs
+rip file downloads.json
 
-# Con opciones globales
-rip -q 3 -f ~/MusicaHiRes file lista.txt
+# With global options
+rip -q 3 -f ~/HiResMusic file list.txt
 ```
 
-> Las URLs duplicadas en archivos de texto se eliminan automáticamente y se avisa cuántas había.
+> Duplicate URLs in text files are removed automatically and the count is reported.
 
 ---
 
 ## `rip search`
 
-Búsqueda interactiva o automática en una fuente específica.
+Interactive or automatic search on a specific source.
 
 ```bash
-rip search [OPCIONES] FUENTE TIPO CONSULTA
+rip search [OPTIONS] SOURCE TYPE QUERY
 ```
 
-### Parámetros
+### Parameters
 
-| Parámetro | Valores | Descripción |
-|-----------|---------|-------------|
-| `FUENTE` | `qobuz` · `tidal` · `deezer` · `soundcloud` | Fuente donde buscar |
-| `TIPO` | `track` · `album` · `artist` · `playlist` | Tipo de contenido |
-| `CONSULTA` | texto libre | Términos de búsqueda |
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `SOURCE` | `qobuz` · `tidal` · `deezer` · `soundcloud` | Source to search in |
+| `TYPE` | `track` · `album` · `artist` · `playlist` | Content type |
+| `QUERY` | free text | Search terms |
 
-### Opciones
+### Options
 
-| Opción | Abreviación | Descripción |
-|--------|-------------|-------------|
-| `--first` | `-f` | Descargar el primer resultado automáticamente sin mostrar menú. |
-| `--output-file PATH` | `-o` | Guardar resultados en un archivo JSON en vez de mostrar el menú. Útil para procesamiento posterior. |
-| `--num-results N` | `-n` | Número máximo de resultados (por defecto: 100). |
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--first` | `-f` | Download the first result automatically without showing the menu. |
+| `--output-file PATH` | `-o` | Save results to a JSON file instead of showing the menu. Useful for later processing. |
+| `--num-results N` | `-n` | Maximum number of results (default: 100). |
 
-> `--first` y `--output-file` son mutuamente excluyentes.
+> `--first` and `--output-file` are mutually exclusive.
 
-### Ejemplos
+### Examples
 
 ```bash
-# Búsqueda interactiva de álbum en Qobuz
+# Interactive album search on Qobuz
 rip search qobuz album "Rumours"
 
-# Búsqueda de track en Tidal
+# Track search on Tidal
 rip search tidal track "Bohemian Rhapsody"
 
-# Buscar artista en Deezer
+# Artist search on Deezer
 rip search deezer artist "Radiohead"
 
-# Descargar el primer resultado directamente
+# Download the first result automatically
 rip search --first qobuz album "Dark Side of the Moon"
 
-# Guardar resultados en JSON para procesar después
-rip search --output-file resultados.json qobuz album "Daft Punk"
+# Save results to JSON for later processing
+rip search --output-file results.json qobuz album "Daft Punk"
 
-# Limitar a 20 resultados
+# Limit to 20 results
 rip search -n 20 tidal album "Mozart"
 
-# Con calidad forzada
+# With forced quality
 rip -q 2 search qobuz album "Miles Davis"
 ```
 
-### Menú interactivo
+### Interactive menu
 
-Al usar `rip search` sin `--first` ni `--output-file`, se muestra un menú con los
-resultados. Navega con las flechas del teclado y pulsa **Enter** para seleccionar.
-Puedes seleccionar múltiples resultados con **Espacio** si el modo lo permite.
+When using `rip search` without `--first` or `--output-file`, a menu is shown with the
+results. Navigate with the arrow keys and press **Enter** to select.
+You can select multiple results with **Space** if the mode allows it.
 
 ---
 
 ## `rip id`
 
-Descarga un elemento conociendo su ID interno en la fuente.
+Download an item by its internal source ID.
 
 ```bash
-rip id FUENTE TIPO ID
+rip id SOURCE TYPE ID
 ```
 
-### Parámetros
+### Parameters
 
-| Parámetro | Valores | Descripción |
-|-----------|---------|-------------|
-| `FUENTE` | `qobuz` · `tidal` · `deezer` · `soundcloud` | Fuente del elemento |
-| `TIPO` | `track` · `album` · `artist` · `playlist` | Tipo de elemento |
-| `ID` | string | ID del elemento en la fuente |
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `SOURCE` | `qobuz` · `tidal` · `deezer` · `soundcloud` | Source of the item |
+| `TYPE` | `track` · `album` · `artist` · `playlist` | Item type |
+| `ID` | string | ID of the item in the source |
 
-### Ejemplos
+### Examples
 
 ```bash
-# Álbum de Qobuz por ID
+# Qobuz album by ID
 rip id qobuz album "0060254728697"
 
-# Track de Tidal por ID
+# Tidal track by ID
 rip id tidal track "12345678"
 
-# Artista de Deezer
+# Deezer artist
 rip id deezer artist "456"
 
-# Playlist de Tidal (el ID suele ser un UUID)
+# Tidal playlist (ID is usually a UUID)
 rip id tidal playlist "01234567-89ab-cdef-0123-456789abcdef"
 ```
 
-> Los IDs se encuentran en las URLs de cada servicio.
-> Por ejemplo, en `https://tidal.com/browse/album/12345678` el ID es `12345678`.
+> IDs are found in the URL of each service.
+> For example, in `https://tidal.com/browse/album/12345678` the ID is `12345678`.
 
 ---
 
 ## `rip lastfm`
 
-Descarga los tracks de una playlist pública de Last.fm buscándolos en Qobuz, Tidal o Deezer.
+Download the tracks of a public Last.fm playlist by searching them on Qobuz, Tidal or Deezer.
 
 ```bash
-rip lastfm [OPCIONES] URL
+rip lastfm [OPTIONS] URL
 ```
 
-### Descripción
+### Description
 
-Lee la lista de tracks de la URL de Last.fm y busca cada uno en la fuente configurada
-(por defecto `qobuz`). Si no encuentra un track, lo busca en la fuente alternativa.
+Reads the track list from the Last.fm URL and searches each track on the configured source
+(default `qobuz`). If a track is not found, it searches on the fallback source.
 
-### Opciones
+### Options
 
-| Opción | Abreviación | Descripción |
-|--------|-------------|-------------|
-| `--source FUENTE` | `-s` | Fuente principal de búsqueda (sobreescribe `lastfm.source` del config). |
-| `--fallback-source FUENTE` | `-fs` | Fuente alternativa si no hay resultados. |
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--source SOURCE` | `-s` | Primary search source (overrides `lastfm.source` in config). |
+| `--fallback-source SOURCE` | `-fs` | Fallback source if no results are found. |
 
-### Ejemplos
+### Examples
 
 ```bash
-# Con la fuente configurada en config.toml
-rip lastfm "https://www.last.fm/user/usuario/playlists/12345"
+# Using the source configured in config.toml
+rip lastfm "https://www.last.fm/user/username/playlists/12345"
 
-# Buscar en Tidal, con Deezer como alternativa
-rip lastfm -s tidal -fs deezer "https://www.last.fm/user/usuario/playlists/12345"
+# Search on Tidal, with Deezer as fallback
+rip lastfm -s tidal -fs deezer "https://www.last.fm/user/username/playlists/12345"
 
-# Solo Qobuz, sin alternativa
-rip lastfm -s qobuz "https://www.last.fm/user/usuario/playlists/12345"
+# Qobuz only, no fallback
+rip lastfm -s qobuz "https://www.last.fm/user/username/playlists/12345"
 ```
 
-> Las playlists de Last.fm deben ser **públicas** para que streamrip pueda acceder a ellas.
+> Last.fm playlists must be **public** for streamrip to access them.
 
 ---
 
 ## `rip config`
 
-Grupo de comandos para gestionar el archivo de configuración.
+Group of commands for managing the configuration file.
 
 ### `rip config open`
 
-Abre `config.toml` en el editor predeterminado del sistema.
+Opens `config.toml` in the system default editor.
 
 ```bash
 rip config open [--vim]
 ```
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--vim` / `-v` | Abrir en Neovim (si está instalado) o Vim. |
+| `--vim` / `-v` | Open in Neovim (if installed) or Vim. |
 
 ```bash
-# Editor predeterminado
+# Default editor
 rip config open
 
 # Neovim / Vim
@@ -321,33 +321,33 @@ rip config open --vim
 
 ### `rip config path`
 
-Muestra la ruta completa al archivo de configuración activo.
+Shows the full path to the active configuration file.
 
 ```bash
 rip config path
 ```
 
-Útil para saber dónde está el config en tu sistema, especialmente si usas `--config-path`.
+Useful for knowing where the config is on your system, especially if you use `--config-path`.
 
 ### `rip config reset`
 
-Resetea el archivo de configuración a los valores por defecto.
+Resets the configuration file to default values.
 
 ```bash
 rip config reset [--yes]
 ```
 
-| Opción | Descripción |
+| Option | Description |
 |--------|-------------|
-| `--yes` / `-y` | Omitir la confirmación. |
+| `--yes` / `-y` | Skip the confirmation prompt. |
 
-> **¡Atención!** Esto sobreescribe tu config actual. Haz una copia de seguridad si tienes configuraciones personalizadas.
+> **Warning!** This overwrites your current config. Make a backup if you have custom settings.
 
 ```bash
-# Con confirmación interactiva
+# With interactive confirmation
 rip config reset
 
-# Sin confirmación
+# Without confirmation
 rip config reset --yes
 ```
 
@@ -355,111 +355,111 @@ rip config reset --yes
 
 ## `rip database`
 
-Grupo de comandos para consultar las bases de datos.
+Group of commands for querying the databases.
 
 ### `rip database browse`
 
-Muestra el contenido de una tabla de la base de datos en formato tabla.
+Shows the contents of a database table in table format.
 
 ```bash
-rip database browse TABLA
+rip database browse TABLE
 ```
 
-| Tabla | Descripción |
+| Table | Description |
 |-------|-------------|
-| `downloads` | Tracks descargados correctamente. |
-| `failed` | Descargas que fallaron. |
+| `downloads` | Successfully downloaded tracks. |
+| `failed` | Downloads that failed. |
 
 ```bash
-# Ver tracks descargados
+# View downloaded tracks
 rip database browse downloads
 
-# Ver descargas fallidas (fuente, tipo, ID)
+# View failed downloads (source, type, ID)
 rip database browse failed
 ```
 
 ---
 
-## Ejemplos de flujos de trabajo
+## Workflow examples
 
-### Flujo básico: buscar y descargar
+### Basic flow: search and download
 
 ```bash
-# 1. Buscar interactivamente
+# 1. Search interactively
 rip search qobuz album "Daft Punk"
 
-# 2. O descargar directamente por URL
+# 2. Or download directly by URL
 rip url "https://open.qobuz.com/album/0060254728697"
 ```
 
-### Flujo de descarga masiva
+### Bulk download flow
 
 ```bash
-# 1. Preparar un archivo con las URLs
-cat > lista.txt << EOF
+# 1. Prepare a file with URLs
+cat > list.txt << EOF
 https://tidal.com/browse/album/111
 https://tidal.com/browse/album/222
 https://open.qobuz.com/album/333
 EOF
 
-# 2. Descargar todo
-rip file lista.txt
+# 2. Download everything
+rip file list.txt
 ```
 
-### Flujo con conversión
+### Conversion flow
 
 ```bash
-# Descargar FLAC de Qobuz y convertir a ALAC (Apple Lossless)
+# Download FLAC from Qobuz and convert to ALAC (Apple Lossless)
 rip -c ALAC url "https://open.qobuz.com/album/abc123"
 
-# O configurar la conversión permanentemente en config.toml:
+# Or configure conversion permanently in config.toml:
 # [conversion]
 # enabled = true
 # codec   = "ALAC"
 ```
 
-### Flujo de descarga de discografía
+### Discography download flow
 
 ```bash
-# Toda la discografía de un artista en Tidal
+# Full discography of an artist on Tidal
 rip url "https://tidal.com/browse/artist/123456"
 
-# Con filtros (solo álbumes de estudio, sin repetidos)
-# Activar en config.toml:
+# With filters (studio albums only, no repeats)
+# Enable in config.toml:
 # [qobuz_filters]
 # non_studio_albums = true
 # repeats = true
 rip url "https://open.qobuz.com/artist/456789"
 ```
 
-### Flujo con Last.fm
+### Last.fm flow
 
 ```bash
-# Exportar tu playlist de Last.fm a Qobuz
-rip lastfm "https://www.last.fm/user/tuusuario/playlists/12345"
+# Export your Last.fm playlist to Qobuz
+rip lastfm "https://www.last.fm/user/yourusername/playlists/12345"
 
-# Con Tidal y fallback a Deezer
-rip lastfm -s tidal -fs deezer "https://www.last.fm/user/tuusuario/playlists/12345"
+# With Tidal and Deezer as fallback
+rip lastfm -s tidal -fs deezer "https://www.last.fm/user/yourusername/playlists/12345"
 ```
 
-### Flujo de depuración
+### Debugging flow
 
 ```bash
-# Ver todos los logs para diagnosticar un problema
+# Show all logs to diagnose a problem
 rip -v url "https://tidal.com/browse/album/12345678"
 
-# Deshabilitar base de datos y re-descargar todo
+# Disable database and re-download everything
 rip -ndb url "https://tidal.com/browse/album/12345678"
 
-# Sin verificación SSL (en redes con certificados problemáticos)
+# Without SSL verification (on networks with certificate issues)
 rip --no-ssl-verify url "https://open.qobuz.com/album/abc123"
 ```
 
 ---
 
-## Ayuda en la terminal
+## Help in the terminal
 
-Todos los comandos tienen ayuda integrada:
+Every command has built-in help:
 
 ```bash
 rip --help

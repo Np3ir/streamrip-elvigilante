@@ -1,106 +1,121 @@
 # Changelog
 
-Todos los cambios notables en **Streamrip — ElVigilante Edition** se documentan aquí.
+All notable changes to **Streamrip — ElVigilante Edition** are documented here.
 
-El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.2.0] — ElVigilante Edition
+## [2.2.1] — ElVigilante Edition
 
-### Añadido
+### Added
 
-- **`artist_separator` configurable** (`[metadata]` en config.toml)
-  — Permite elegir cómo se unen varios artistas en nombres de archivo y tags de audio
-  (`", "`, `" & "`, `" / "`, `"; "`, etc.). Afecta tanto al tag `ARTIST`/`ALBUMARTIST`
-  embebido como al nombre del archivo generado. Se aplica en Qobuz, Tidal y Deezer.
-  El valor por defecto es `", "` — sin cambio de comportamiento para configs existentes.
+- **Configurable `artist_separator`** (`[metadata]` in config.toml)
+  — Lets you choose how multiple artists are joined in file names and audio tags
+  (`", "`, `" & "`, `" / "`, `"; "`, etc.). Applies to both the embedded
+  `ARTIST`/`ALBUMARTIST` tag and the generated file name. Works for Qobuz, Tidal and Deezer.
+  Default is `", "` — no behaviour change for existing configs.
 
-- **`_resolve_track_folder()` acepta `str | os.PathLike[str]`** (`media/playlist.py`)
-  — La función auxiliar que calcula la carpeta de cada track en una playlist ahora
-  acepta rutas de tipo `pathlib.Path` además de `str`, usando `os.fspath()` internamente.
+- **`AlbumMetadata.from_qobuz` joins all album artists**
+  — Previously only `artists[0]` was used. All artists in the Qobuz `artists` array are now
+  joined with `artist_separator`, consistent with track-level artist handling.
 
-- **Warning de `rip()` mejorado** (`media/track.py`)
-  — Cuando un track no se descarga tras agotar los reintentos, el mensaje de log incluye
-  ahora el ID del track (`id=…`) y el número de reintentos configurado (`after N retries`)
-  para facilitar la depuración.
+- **`artist_separator` threaded through `from_album_resp`**
+  — `AlbumMetadata.from_album_resp` now accepts and forwards `artist_separator` to
+  the source-specific parsers, so albums resolved via `PendingAlbum` also respect the setting.
 
-- **`max_retries` normalizado a `int`** (`config.py`)
-  — Si `max_retries` viene como string en el TOML (p.ej. `"3"`), se convierte a entero
-  automáticamente. Valores negativos se resetean a 0 con un warning.
+- **Internal methods have no default for `artist_separator`**
+  — `from_qobuz`, `from_tidal`, `from_deezer` and `from_tidal_playlist_track_resp`
+  no longer have a hardcoded `= ", "` default. The default lives only on the public
+  dispatchers (`from_resp`, `from_track_resp`, `from_album_resp`), preventing silent drift
+  between the config value and the hardcoded fallback.
 
-- **Renombrado de `test_semaphore.py` a `test_semaphore_behavior.py`** y conversión a
-  `@pytest.mark.asyncio` — Tests asíncronos nativos sin `asyncio.run()`.
+- **`_resolve_track_folder()` accepts `str | os.PathLike[str]`** (`media/playlist.py`)
+  — The helper that computes the track folder in a playlist now accepts `pathlib.Path`
+  objects in addition to `str`, using `os.fspath()` internally.
 
-- **`source` y `extension` en `_FailingDownloadable`** (`test_track_retry_behavior.py`)
-  — Atributos necesarios para que el path de `set_failed` nunca lance `AttributeError`
-  al agotar los reintentos.
+- **Improved `rip()` warning** (`media/track.py`)
+  — When a track is not downloaded after all retries, the log message now includes the
+  track ID (`id=…`) and the configured retry count (`after N retries`) to aid debugging.
 
-- **Lógica de postprocess protegida** (`media/track.py`)
-  — Si el archivo no existe en disco tras la descarga (todos los reintentos agotados),
-  `rip()` ahora registra un warning descriptivo y retorna en vez de fallar en
-  `postprocess()`.
+- **`max_retries` normalised to `int`** (`config.py`)
+  — If `max_retries` comes as a string in the TOML (e.g. `"3"`), it is automatically
+  converted to an integer. Negative values are reset to 0 with a warning.
 
-- **`_resolve_track_folder()` extraído** (`media/playlist.py`)
-  — La lógica de resolución de carpeta para tracks de playlist se movió a una función
-  auxiliar privada, eliminando código duplicado.
+- **`test_semaphore_behavior.py`** — async tests using `@pytest.mark.asyncio`
+  — Replaces the previous `asyncio.run()` approach.
 
-- **Backoff exponencial completo** (`client/downloadable.py`)
-  — Los reintentos esperan `retry_delay * 2^intento` segundos, con un techo de
-  `max_wait` segundos. DNS failures y errores de red se reintentan correctamente.
+- **`source` and `extension` on `_FailingDownloadable`** (`test_track_retry_behavior.py`)
+  — Attributes required so `set_failed` never raises `AttributeError` when retries are
+  exhausted.
 
-- **Credenciales Tidal por variables de entorno**
-  — `TIDAL_CLIENT_ID` y `TIDAL_CLIENT_SECRET` se pueden exportar en vez de guardarlas
-  en `config.toml`.
+- **Safe post-process guard** (`media/track.py`)
+  — If the file does not exist on disk after all retries, `rip()` now logs a descriptive
+  warning and returns instead of crashing in `postprocess()`.
 
-- **Suite de tests** (69 tests en 5 módulos)
+- **`_resolve_track_folder()` extracted** (`media/playlist.py`)
+  — Folder-resolution logic for playlist tracks moved to a private helper, removing
+  duplicated code.
+
+- **Full exponential back-off** (`client/downloadable.py`)
+  — Retries wait `retry_delay * 2^attempt` seconds, capped at `max_wait`. DNS failures
+  and network errors are retried correctly.
+
+- **Tidal credentials via environment variables**
+  — `TIDAL_CLIENT_ID` and `TIDAL_CLIENT_SECRET` can be exported instead of storing
+  them in `config.toml`.
+
+- **Test suite** (69 tests across 5 modules)
   — `test_config.py`, `test_db.py`, `test_filepath_utils.py`,
   `test_semaphore_behavior.py`, `test_track_retry_behavior.py`.
 
-- **Salida de color estilo TiDDL**
-  — Verde para descargas correctas, amarillo para saltadas, rojo para errores.
+- **TiDDL-style colour output**
+  — Green for successful downloads, yellow for skipped, red for errors.
 
-### Corregido
+- **Full English documentation**
+  — README.md, CHANGELOG.md and all files in `docs/` are now in English.
 
-- **Carpeta duplicada en playlists** con `set_playlist_to_album = true`
-  — El nombre del álbum/playlist ya no se añade como subcarpeta cuando
-  `set_playlist_to_album` está activado (se usaba como nombre de carpeta raíz y
-  también como subcarpeta, duplicándolo).
+### Fixed
 
-- **AlbumMetadata `repr` en nombres de carpeta** (`media/playlist.py`)
-  — Las carpetas de álbum en playlists mostraban el `repr()` del objeto
-  `AlbumMetadata` en lugar del título limpio del álbum.
+- **Duplicate folder in playlists** with `set_playlist_to_album = true`
+  — The album/playlist name is no longer added as a sub-folder when
+  `set_playlist_to_album` is enabled (it was being used as both the root folder name
+  and a sub-folder, resulting in duplication).
 
-- **Crash en `postprocess()` cuando falla la descarga**
-  — Si todos los reintentos se agotan y el archivo no existe, el proceso continuaba
-  hacia `postprocess()` y fallaba. Ahora se detecta y se salta con un warning.
+- **`AlbumMetadata` repr in folder names** (`media/playlist.py`)
+  — Album folders in playlists were showing the `repr()` of the `AlbumMetadata` object
+  instead of the clean album title.
 
-- **`assert` reemplazados por excepciones propias**
-  — Evita `AssertionError` inesperados en producción.
+- **Crash in `postprocess()` on download failure**
+  — If all retries were exhausted and the file did not exist, the process continued
+  into `postprocess()` and crashed. It is now detected and skipped with a warning.
 
-- **Semáforo con configuración conflictiva**
-  — Configuración `concurrency=False` con `max_connections > 1` ya no rompe el
-  programa; emite un warning descriptivo.
+- **`assert` replaced by proper exceptions**
+  — Avoids unexpected `AssertionError` in production.
 
-### Cambiado
+- **Semaphore with conflicting configuration**
+  — Setting `concurrency=False` with `max_connections > 1` no longer crashes; it emits
+  a descriptive warning instead.
 
-- **Estructura de paquete plana** (`flat layout`)
-  — Los módulos viven directamente en `site-packages/streamrip/` además del
-  layout de repositorio estándar en `streamrip/streamrip/`.
+### Changed
 
-- **`config.toml` versión `2.0.6`**
-  — Añadidos `max_retries`, `retry_delay`, `max_wait` en `[downloads]` y
-  `artist_separator` en `[metadata]`.
+- **Flat package layout**
+  — Modules live directly under `site-packages/streamrip/` in addition to the standard
+  repository layout under `streamrip/streamrip/`.
+
+- **`config.toml` version `2.0.6` baseline**
+  — Added `max_retries`, `retry_delay`, `max_wait` under `[downloads]` and
+  `artist_separator` under `[metadata]`.
 
 ---
 
 ## [2.0.6] — nathom/streamrip (upstream base)
 
-Base desde la que parte este fork. Ver el
-[historial del proyecto original](https://github.com/nathom/streamrip/releases)
-para el historial previo.
+Base from which this fork was created. See the
+[upstream project history](https://github.com/nathom/streamrip/releases)
+for prior changes.
 
 ---
 
-> Este fork mantiene compatibilidad total con el formato de `config.toml` de la versión
-> upstream. Los valores nuevos tienen defaults que preservan el comportamiento original.
+> This fork maintains full compatibility with the upstream `config.toml` format.
+> All new settings have defaults that preserve the original behaviour.

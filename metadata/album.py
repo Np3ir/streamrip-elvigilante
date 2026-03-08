@@ -143,7 +143,7 @@ class AlbumMetadata:
             return raw_date, year
 
     @classmethod
-    def from_qobuz(cls, resp: dict) -> AlbumMetadata:
+    def from_qobuz(cls, resp: dict, artist_separator: str) -> AlbumMetadata:
         album = resp.get("title", "Unknown Album")
         tracktotal = resp.get("tracks_count", 1)
         genre = resp.get("genres_list") or resp.get("genre") or []
@@ -152,7 +152,9 @@ class AlbumMetadata:
         release_date, year = cls.correct_release_date(raw_date)
         _copyright = resp.get("copyright", "")
         if artists := resp.get("artists"):
-            albumartist = artists[0]["name"]
+            albumartist = artist_separator.join(
+                a["name"] for a in artists if a.get("name")
+            ) or typed(safe_get(resp, "artist", "name"), str)
         else:
             albumartist = typed(safe_get(resp, "artist", "name"), str)
         albumcomposer = typed(safe_get(resp, "composer", "name", default=""), str)
@@ -367,7 +369,7 @@ class AlbumMetadata:
         )
 
     @classmethod
-    def from_tidal_playlist_track_resp(cls, resp: dict, artist_separator: str = ", ") -> AlbumMetadata | None:
+    def from_tidal_playlist_track_resp(cls, resp: dict, artist_separator: str) -> AlbumMetadata | None:
         """Handles single track responses containing album info."""
         album_resp = resp.get("album", {})
         if not resp.get("allowStreaming", False):
@@ -424,9 +426,9 @@ class AlbumMetadata:
         )
 
     @classmethod
-    def from_album_resp(cls, resp: dict, source: str) -> AlbumMetadata | None:
+    def from_album_resp(cls, resp: dict, source: str, artist_separator: str = ", ") -> AlbumMetadata | None:
         if source == "qobuz":
-            return cls.from_qobuz(resp)
+            return cls.from_qobuz(resp, artist_separator)
         if source == "tidal":
             return cls.from_tidal(resp)
         if source == "soundcloud":
@@ -441,7 +443,7 @@ class AlbumMetadata:
             raise Exception("Invalid source: None or empty")
         source = source.strip().lower()
         if source == "qobuz":
-            return cls.from_qobuz(resp["album"])
+            return cls.from_qobuz(resp["album"], artist_separator)
         if source == "tidal":
             return cls.from_tidal_playlist_track_resp(resp, artist_separator)
         if source == "soundcloud":

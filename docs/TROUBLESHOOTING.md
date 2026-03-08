@@ -1,99 +1,99 @@
-# Solución de problemas
+# Troubleshooting
 
-Esta guía cubre los errores más comunes y cómo resolverlos.
-
----
-
-## Índice
-
-- [Errores de autenticación](#errores-de-autenticación)
-- [Errores de SSL](#errores-de-ssl)
-- [Errores de descarga y reintentos](#errores-de-descarga-y-reintentos)
-- [Errores de archivo y rutas](#errores-de-archivo-y-rutas)
-- [Errores de conversión](#errores-de-conversión)
-- [Problemas de configuración](#problemas-de-configuración)
-- [Problemas de base de datos](#problemas-de-base-de-datos)
-- [Problemas de metadatos y carátulas](#problemas-de-metadatos-y-carátulas)
-- [Problemas de rendimiento](#problemas-de-rendimiento)
-- [Diagnóstico general](#diagnóstico-general)
+This guide covers the most common errors and how to resolve them.
 
 ---
 
-## Errores de autenticación
+## Table of contents
 
-### Qobuz: "Invalid credentials" o "Authentication failed"
+- [Authentication errors](#authentication-errors)
+- [SSL errors](#ssl-errors)
+- [Download and retry errors](#download-and-retry-errors)
+- [File and path errors](#file-and-path-errors)
+- [Conversion errors](#conversion-errors)
+- [Configuration problems](#configuration-problems)
+- [Database problems](#database-problems)
+- [Metadata and artwork problems](#metadata-and-artwork-problems)
+- [Performance problems](#performance-problems)
+- [General diagnostics](#general-diagnostics)
 
-**Causa:** Email/contraseña incorrectos o el hash MD5 mal calculado.
+---
 
-**Solución:**
+## Authentication errors
 
-1. Verifica que el email es correcto en `config.toml`
-2. Recalcula el hash MD5 del password:
+### Qobuz: "Invalid credentials" or "Authentication failed"
+
+**Cause:** Incorrect email/password or a wrongly computed MD5 hash.
+
+**Solution:**
+
+1. Verify the email is correct in `config.toml`
+2. Recompute the MD5 hash of your password:
 
 ```bash
-python3 -c "import hashlib; print(hashlib.md5('TU_PASSWORD'.encode()).hexdigest())"
+python3 -c "import hashlib; print(hashlib.md5('YOUR_PASSWORD'.encode()).hexdigest())"
 ```
 
-3. Copia el resultado en `password_or_token` del config.
+3. Copy the result into `password_or_token` in the config.
 
-Si usas token (`use_auth_token = true`), verifica que el token no haya caducado.
+If you use a token (`use_auth_token = true`), verify that the token has not expired.
 
 ---
 
-### Tidal: "Token expired" o "Unauthorized"
+### Tidal: "Token expired" or "Unauthorized"
 
-**Causa:** El access token de Tidal caduca aproximadamente cada semana.
+**Cause:** The Tidal access token expires roughly every week.
 
-**Solución:**
+**Solution:**
 
-Los tokens se renuevan automáticamente si `refresh_token` está guardado en el config.
-Si el error persiste:
+Tokens are renewed automatically if `refresh_token` is stored in the config.
+If the error persists:
 
-1. Borra los campos `access_token`, `refresh_token` y `token_expiry` del config
-2. Vuelve a autenticarte
+1. Delete the `access_token`, `refresh_token` and `token_expiry` fields from the config
+2. Re-authenticate
 
-Alternativamente, usa variables de entorno que no caducan:
+Alternatively, use environment variables that do not expire:
 
 ```bash
-export TIDAL_CLIENT_ID="tu_client_id"
-export TIDAL_CLIENT_SECRET="tu_client_secret"
+export TIDAL_CLIENT_ID="your_client_id"
+export TIDAL_CLIENT_SECRET="your_client_secret"
 ```
 
 ---
 
-### Deezer: "Invalid ARL" o sin calidad FLAC
+### Deezer: "Invalid ARL" or no FLAC quality
 
-**Causa:** El ARL ha caducado o es incorrecto.
+**Cause:** The ARL has expired or is incorrect.
 
-**Solución:**
+**Solution:**
 
-1. Abre [deezer.com](https://www.deezer.com) en tu navegador e inicia sesión
-2. Herramientas de desarrollador (`F12`) → **Aplicación → Cookies → deezer.com**
-3. Copia el valor de la cookie `arl` (es una cadena larga)
-4. Actualiza el config:
+1. Open [deezer.com](https://www.deezer.com) in your browser and log in
+2. Developer Tools (`F12`) → **Application → Cookies → deezer.com**
+3. Copy the value of the `arl` cookie (a long string)
+4. Update the config:
 
 ```toml
 [deezer]
-arl = "NUEVA_COOKIE_ARL"
+arl = "NEW_ARL_COOKIE"
 ```
 
-> Los ARL suelen durar varios meses pero pueden invalidarse si cambias la contraseña o cierras sesión en todos los dispositivos.
+> ARLs typically last several months but can be invalidated if you change your password or log out of all devices.
 
 ---
 
-### "403 Forbidden" o "Not streamable"
+### "403 Forbidden" or "Not streamable"
 
-**Causa:** El track no está disponible en tu región, tu suscripción no cubre esa calidad, o el contenido ha sido eliminado.
+**Cause:** The track is not available in your region, your subscription does not cover that quality level, or the content has been removed.
 
-**Solución:**
+**Solution:**
 
-- Prueba una calidad inferior (`-q 2` o `-q 1`)
-- Verifica que tu suscripción incluye el nivel de calidad solicitado
-- El track puede no estar disponible en tu país
+- Try a lower quality (`-q 2` or `-q 1`)
+- Verify that your subscription includes the requested quality level
+- The track may not be available in your country
 
 ---
 
-## Errores de SSL
+## SSL errors
 
 ### "SSL Certificate verification error"
 
@@ -101,34 +101,34 @@ arl = "NUEVA_COOKIE_ARL"
 SSL Certificate verification error: Cannot connect to host ... certificate verify failed
 ```
 
-**Causa:** El certificado SSL del servidor no es válido o hay un proxy interceptando la conexión.
+**Cause:** The server's SSL certificate is invalid or a proxy is intercepting the connection.
 
-**Solución temporal (una descarga):**
+**Temporary fix (one download):**
 
 ```bash
 rip --no-ssl-verify url "https://..."
 ```
 
-**Solución permanente (en config.toml):**
+**Permanent fix (in config.toml):**
 
 ```toml
 [downloads]
 verify_ssl = false
 ```
 
-> Usa esta opción solo si confías en tu red. Desactivar SSL puede exponerte a ataques de intermediario.
+> Use this option only on trusted networks. Disabling SSL can expose you to man-in-the-middle attacks.
 
 ---
 
-## Errores de descarga y reintentos
+## Download and retry errors
 
 ### "Download failed after N retries"
 
-**Causa:** El servidor no responde, hay un problema de red temporal, o el track está siendo limitado.
+**Cause:** The server is not responding, there is a temporary network issue, or the track is being rate-limited.
 
-**Solución:**
+**Solution:**
 
-1. Aumenta los reintentos y la espera:
+1. Increase retries and wait time:
 
 ```toml
 [downloads]
@@ -137,28 +137,28 @@ retry_delay = 5.0
 max_wait    = 120.0
 ```
 
-2. Reduce las conexiones simultáneas:
+2. Reduce simultaneous connections:
 
 ```toml
 [downloads]
-max_connections = 2
+max_connections     = 2
 requests_per_minute = 30
 ```
 
-3. Espera unos minutos y reintenta (puede ser throttling de la API)
+3. Wait a few minutes and retry (may be API throttling)
 
 ---
 
 ### "Track was not downloaded after all retries; skipping post-processing"
 
-**Causa:** El archivo no se creó en disco tras agotar todos los reintentos. El log incluirá el ID del track para facilitar la identificación.
+**Cause:** The file was not created on disk after exhausting all retries. The log includes the track ID to help identify it.
 
-**Solución:**
+**Solution:**
 
-- Verifica que tienes espacio en disco suficiente
-- Comprueba los permisos de la carpeta de descarga
-- Usa `rip -v` para ver los logs detallados del error específico
-- Revisa la base de datos de fallidos:
+- Verify that you have enough disk space
+- Check the permissions on the download folder
+- Use `rip -v` to see detailed logs for the specific error
+- Check the failed downloads database:
 
 ```bash
 rip database browse failed
@@ -166,14 +166,14 @@ rip database browse failed
 
 ---
 
-### La descarga se para a mitad y no retoma
+### Download stops halfway and does not resume
 
-**Causa:** Streamrip no tiene descarga reanudable incorporada. Si el proceso se interrumpe, el archivo parcial puede quedar en disco.
+**Cause:** Streamrip does not have built-in resumable downloads. If the process is interrupted, a partial file may remain on disk.
 
-**Solución:**
+**Solution:**
 
-1. Borra los archivos `.tmp` o parciales en la carpeta de descarga
-2. Usa `-ndb` si el track quedó marcado como descargado en la BD pero el archivo está incompleto:
+1. Delete any `.tmp` or partial files in the download folder
+2. Use `-ndb` if the track was marked as downloaded in the database but the file is incomplete:
 
 ```bash
 rip -ndb url "https://..."
@@ -183,235 +183,235 @@ rip -ndb url "https://..."
 
 ### "Too many requests" / Rate limiting
 
-**Causa:** Se están haciendo demasiadas llamadas a la API en poco tiempo.
+**Cause:** Too many API calls are being made in a short period.
 
-**Solución:**
+**Solution:**
 
 ```toml
 [downloads]
-requests_per_minute = 30   # reducir el límite
-max_connections     = 3    # menos conexiones simultáneas
+requests_per_minute = 30   # reduce the limit
+max_connections     = 3    # fewer simultaneous connections
 ```
 
 ---
 
-## Errores de archivo y rutas
+## File and path errors
 
-### "Filename too long" / Error al crear el archivo
+### "Filename too long" / Error creating file
 
-**Causa:** El nombre de archivo generado supera el límite del sistema de archivos (260 caracteres en Windows, 255 en Linux/macOS para el nombre del archivo).
+**Cause:** The generated file name exceeds the filesystem limit (260 characters on Windows, 255 on Linux/macOS for the file name component).
 
-**Solución:**
+**Solution:**
 
 ```toml
 [filepaths]
-truncate_to = 80              # reducir longitud máxima
-restrict_characters = true    # solo ASCII (evita problemas con caracteres especiales)
+truncate_to         = 80              # reduce maximum length
+restrict_characters = true            # ASCII only (avoids issues with special characters)
 
-# Simplificar plantillas
+# Simplify templates
 folder_format = "{albumartist}/{title} ({year})"
 track_format  = "{tracknumber:02}. {title}"
 ```
 
 ---
 
-### Los archivos se descargan pero no aparecen donde espero
+### Files download but don't appear where expected
 
-**Causa:** La carpeta de descarga no está configurada o apunta a un lugar incorrecto.
+**Cause:** The download folder is not configured or points to the wrong location.
 
-**Solución:**
+**Solution:**
 
 ```bash
-# Ver la carpeta configurada
+# See the configured folder
 rip config path
-# Luego abrir el config y verificar `folder`
+# Then open the config and check `folder`
 
-# O especificar la carpeta directamente
-rip -f /ruta/a/mi/musica url "https://..."
+# Or specify the folder directly
+rip -f /path/to/my/music url "https://..."
 ```
 
 ---
 
-### Caracteres extraños en nombres de archivo (`?`, `:`, `*`, etc.)
+### Strange characters in file names (`?`, `:`, `*`, etc.)
 
-**Causa:** Los metadatos contienen caracteres no válidos en el sistema de archivos (especialmente en Windows).
+**Cause:** Metadata contains characters that are invalid on the filesystem (especially on Windows).
 
-**Solución:**
+**Solution:**
 
 ```toml
 [filepaths]
-restrict_characters = true   # solo ASCII imprimible
+restrict_characters = true   # printable ASCII only
 ```
 
-> Streamrip sustituye automáticamente `:` por `：` (coma de ancho completo) y otros caracteres problemáticos. Si aun así hay problemas, activa `restrict_characters`.
+> Streamrip automatically replaces `:` with `：` (full-width colon) and other problematic characters. If issues persist, enable `restrict_characters`.
 
 ---
 
-## Errores de conversión
+## Conversion errors
 
-### "ffmpeg not found" o "Conversion failed"
+### "ffmpeg not found" or "Conversion failed"
 
-**Causa:** FFmpeg no está instalado o no está en el PATH.
+**Cause:** FFmpeg is not installed or is not in the PATH.
 
-**Verificar:**
+**Verify:**
 
 ```bash
 ffmpeg -version
 ```
 
-**Instalar FFmpeg:**
+**Install FFmpeg:**
 
-- **Windows:** `winget install ffmpeg` o desde [ffmpeg.org](https://ffmpeg.org/download.html)
+- **Windows:** `winget install ffmpeg` or from [ffmpeg.org](https://ffmpeg.org/download.html)
 - **macOS:** `brew install ffmpeg`
 - **Ubuntu/Debian:** `sudo apt install ffmpeg`
 - **Fedora:** `sudo dnf install ffmpeg`
 
 ---
 
-### El archivo convertido no tiene la calidad esperada
+### The converted file does not have the expected quality
 
-**Causa:** La frecuencia o profundidad de bits configurada es mayor que la del archivo original; la conversión no puede mejorar la calidad, solo mantenerla o reducirla.
+**Cause:** The configured frequency or bit depth is higher than the original file's; conversion cannot improve quality, only maintain or reduce it.
 
-**Revisión:**
+**Review:**
 
 ```toml
 [conversion]
-# Solo se aplica si el original tiene MAYOR resolución que esto
-sampling_rate = 44100   # no downsamplea FLAC 44.1kHz
-bit_depth     = 16      # no reduce de 16-bit (no hay cambio)
+# Only applied if the original has HIGHER resolution than this
+sampling_rate = 44100   # does not down-sample FLAC 44.1 kHz
+bit_depth     = 16      # does not reduce from 16-bit (no change)
 ```
 
 ---
 
-## Problemas de configuración
+## Configuration problems
 
-### "Error loading config" al arrancar
+### "Error loading config" on startup
 
 ```
-Error loading config from /ruta/config.toml: ...
+Error loading config from /path/config.toml: ...
 Try running rip config reset
 ```
 
-**Causa:** El archivo de config está corrupto o tiene sintaxis TOML incorrecta.
+**Cause:** The config file is corrupt or has invalid TOML syntax.
 
-**Solución:**
+**Solution:**
 
 ```bash
-# Resetear a los valores por defecto
+# Reset to default values
 rip config reset
 
-# O usar un config alternativo
-rip --config-path /ruta/a/config.toml url "..."
+# Or use an alternative config
+rip --config-path /path/to/config.toml url "..."
 ```
 
 ---
 
-### "Outdated config" / Config desactualizado
+### "Outdated config" / Config out of date
 
-**Causa:** Estás usando un `config.toml` de una versión anterior.
+**Cause:** You are using a `config.toml` from an older version.
 
-**Solución:** Streamrip actualiza el config automáticamente. Si el error persiste:
+**Solution:** Streamrip updates the config automatically. If the error persists:
 
 ```bash
 rip config reset
 ```
 
-Luego vuelve a poner tus credenciales y preferencias.
+Then re-enter your credentials and preferences.
 
 ---
 
-### Los cambios en el config no tienen efecto
+### Config changes have no effect
 
-**Causa:** Hay múltiples archivos de config y estás editando el incorrecto.
+**Cause:** There are multiple config files and you are editing the wrong one.
 
-**Solución:**
+**Solution:**
 
 ```bash
-# Ver qué config se está usando
+# See which config is being used
 rip config path
 ```
 
-Edita el archivo que aparece en esa ruta.
+Edit the file shown at that path.
 
 ---
 
-## Problemas de base de datos
+## Database problems
 
-### Un track que ya tienes se descarga otra vez
+### A track you already have is downloaded again
 
-**Causa:** El track no estaba en la base de datos (fue descargado con `--no-db`, o la BD fue borrada, o el ID cambió).
+**Cause:** The track was not in the database (downloaded with `--no-db`, the database was deleted, or the ID changed).
 
-**Comportamiento esperado:** Streamrip comprueba por ID, no por nombre de archivo.
+**Expected behaviour:** Streamrip checks by ID, not by file name.
 
-**Diagnóstico:**
+**Diagnosis:**
 
 ```bash
 rip database browse downloads
 ```
 
-Si el ID no aparece, añádelo manualmente o simplemente déjalo descargar de nuevo.
+If the ID does not appear, add it manually or simply let it download again.
 
 ---
 
-### Un track no se descarga y no aparece en la BD de fallidos
+### A track is not downloaded and does not appear in the failed database
 
-**Causa:** El track fue saltado por no estar disponible (`NonStreamableError`), lo cual no se considera un "fallo" sino una exclusión esperada.
+**Cause:** The track was skipped as unavailable (`NonStreamableError`), which is not considered a "failure" but an expected exclusion.
 
-**Solución:** Verifica la disponibilidad del contenido en tu región y con tu suscripción.
+**Solution:** Verify content availability in your region and with your subscription.
 
 ---
 
 ### "Database is locked"
 
-**Causa:** Otra instancia de streamrip está corriendo simultáneamente o el archivo de BD está bloqueado.
+**Cause:** Another streamrip instance is running simultaneously or the database file is locked.
 
-**Solución:**
+**Solution:**
 
-1. Asegúrate de que no hay otro `rip` corriendo
-2. Si persiste, borra el archivo `.db` de la BD (pierdes el historial):
+1. Make sure no other `rip` process is running
+2. If it persists, delete the `.db` file (you lose the history):
 
 ```bash
-# Ver la ruta
+# Find the path
 rip config path
-# El archivo .db está en el mismo directorio que el config
+# The .db file is in the same directory as the config
 ```
 
 ---
 
-## Problemas de metadatos y carátulas
+## Metadata and artwork problems
 
-### Las carátulas no se embeben
+### Cover art is not embedded
 
-**Causa:** Imagen demasiado grande con `embed_size = "original"`, o el codec de destino no soporta carátulas embebidas.
+**Cause:** Image too large with `embed_size = "original"`, or the target codec does not support embedded covers.
 
-**Solución:**
+**Solution:**
 
 ```toml
 [artwork]
-embed_size     = "large"    # en vez de "original"
-embed_max_width = 600       # limitar a 600px
+embed_size      = "large"    # instead of "original"
+embed_max_width = 600        # limit to 600 px
 ```
 
 ---
 
-### El nombre del artista usa `, ` pero quiero `&`
+### Artist name uses `, ` but I want `&`
 
-Configura el separador de artistas:
+Configure the artist separator:
 
 ```toml
 [metadata]
 artist_separator = " & "
 ```
 
-Esto afecta tanto al nombre del archivo como al tag `ARTIST` embebido.
+This affects both the file name and the embedded `ARTIST` tag.
 
 ---
 
-### Los tracks de la playlist tienen números de track incorrectos
+### Playlist tracks have incorrect track numbers
 
-**Causa:** `renumber_playlist_tracks = false` usa el número original del álbum en vez de la posición en la playlist.
+**Cause:** `renumber_playlist_tracks = false` uses the original album number instead of the position in the playlist.
 
-**Solución:**
+**Solution:**
 
 ```toml
 [metadata]
@@ -420,9 +420,9 @@ renumber_playlist_tracks = true
 
 ---
 
-### El campo ALBUM de los tracks de una playlist muestra el álbum original, no la playlist
+### The ALBUM field of playlist tracks shows the original album, not the playlist
 
-**Solución:**
+**Solution:**
 
 ```toml
 [metadata]
@@ -431,11 +431,11 @@ set_playlist_to_album = true
 
 ---
 
-## Problemas de rendimiento
+## Performance problems
 
-### Las descargas son muy lentas
+### Downloads are very slow
 
-1. **Activar concurrencia:**
+1. **Enable concurrency:**
 
 ```toml
 [downloads]
@@ -443,9 +443,9 @@ concurrency     = true
 max_connections = 6
 ```
 
-2. **Verificar la velocidad de internet:** streamrip puede estar limitado por tu conexión o por la API del servicio.
+2. **Check your internet speed:** streamrip may be limited by your connection or the service's API.
 
-3. **Reducir la tasa de peticiones si hay throttling:**
+3. **Reduce request rate if throttling occurs:**
 
 ```toml
 [downloads]
@@ -454,69 +454,69 @@ requests_per_minute = 30
 
 ---
 
-### Alto uso de CPU durante las descargas
+### High CPU usage during downloads
 
-**Causa probable:** La conversión de audio está activa.
+**Probable cause:** Audio conversion is enabled.
 
 ```toml
 [conversion]
-enabled = false   # desactivar si no necesitas convertir
+enabled = false   # disable if you do not need conversion
 ```
 
 ---
 
-## Diagnóstico general
+## General diagnostics
 
-### Activar modo verbose
+### Enable verbose mode
 
-El modo `-v` muestra todos los logs internos, muy útil para identificar el origen de un error:
+The `-v` flag shows all internal logs, very useful for identifying the source of an error:
 
 ```bash
 rip -v url "https://..."
 rip -v search qobuz album "..."
 ```
 
-### Ver versión instalada
+### Check the installed version
 
 ```bash
 rip --version
 ```
 
-### Verificar la instalación de dependencias
+### Verify the dependency installation
 
 ```bash
 python3 -c "import streamrip; print('OK')"
 ffmpeg -version
 ```
 
-### Flujo de diagnóstico paso a paso
+### Step-by-step diagnostic flow
 
 ```bash
-# 1. Ver qué config se usa
+# 1. See which config is being used
 rip config path
 
-# 2. Ver logs detallados
+# 2. See detailed logs
 rip -v url "https://..."
 
-# 3. Verificar la BD de fallidos
+# 3. Check the failed downloads database
 rip database browse failed
 
-# 4. Reintentar sin base de datos
+# 4. Retry without the database
 rip -ndb url "https://..."
 
-# 5. Resetear config si todo falla
+# 5. Reset config if all else fails
 rip config reset
 ```
 
 ---
 
-## Reportar un bug
+## Reporting a bug
 
-Si el problema persiste después de seguir esta guía:
+If the problem persists after following this guide:
 
-1. Ejecuta con `-v` y copia el log completo
-2. Incluye la versión: `rip --version`
-3. Incluye el sistema operativo y versión de Python: `python3 --version`
-4. Abre un issue en [github.com/Np3ir/streamrip-elvigilante](https://github.com/Np3ir/streamrip-elvigilante/issues)
+1. Run with `-v` and copy the full log
+2. Include the version: `rip --version`
+3. Include the OS and Python version: `python3 --version`
+4. Open an issue at [github.com/Np3ir/streamrip-elvigilante](https://github.com/Np3ir/streamrip-elvigilante/issues)
 
-> **Nunca incluyas credenciales (ARL, tokens, contraseñas) al reportar un bug.**
+> **Never include credentials (ARL, tokens, passwords) when reporting a bug.**
