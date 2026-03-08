@@ -35,21 +35,27 @@ logger = logging.getLogger("streamrip")
 
 
 def _resolve_track_folder(
-    playlist_folder: str,
+    playlist_folder: str | os.PathLike[str],
     album_title: str,
     set_playlist_to_album: bool,
     restrict_chars: bool,
 ) -> str:
     """Return the folder where a playlist track should be saved.
 
+    Accepts *playlist_folder* as either a plain ``str`` or a ``PathLike``
+    (e.g. ``pathlib.Path``) so callers using either style don't need to cast.
+    The return value is always a ``str`` for compatibility with the rest of the
+    codebase which uses ``os.path`` throughout.
+
     When *set_playlist_to_album* is ``True`` the playlist IS the album, so
     tracks go directly in *playlist_folder* (creating a subfolder would double
     the name).  Otherwise tracks are grouped under their original album name.
     """
+    folder_str = os.fspath(playlist_folder)
     if set_playlist_to_album:
-        return playlist_folder
+        return folder_str
     safe_album_name = clean_filename(album_title, restrict=restrict_chars)
-    return os.path.join(playlist_folder, safe_album_name)
+    return os.path.join(folder_str, safe_album_name)
 
 
 def _get_custom_playlist_folder() -> str | None:

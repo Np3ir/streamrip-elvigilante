@@ -50,8 +50,11 @@ class Track(Media):
         # silently after exhausting all retries without creating the file.
         if not os.path.isfile(self.download_path):
             logger.warning(
-                "Track '%s' was not downloaded after all retries; skipping post-processing.",
+                "Track '%s' (id=%s) was not downloaded after %d retries; "
+                "skipping post-processing.",
                 self.meta.title,
+                self.meta.info.id,
+                self.config.session.downloads.max_retries,
             )
             return
         await self.postprocess()
