@@ -1,16 +1,13 @@
 import asyncio
-import json
 import logging
 import platform
 import sys
 import re
 import os
-import aiofiles
-import tomllib  # Native in Python 3.11+
 
 from .. import db
 from ..client import Client, DeezerClient, QobuzClient, SoundcloudClient, TidalClient
-from ..config import Config
+from ..config import Config, DEFAULT_DOWNLOADS_DB_PATH, DEFAULT_FAILED_DOWNLOADS_DB_PATH
 from ..console import console
 from ..media import (
     Media,
@@ -31,6 +28,8 @@ from .prompter import get_prompter
 logger = logging.getLogger("streamrip")
 
 if platform.system() == "Windows":
+    # aiohttp requiere SelectorEventLoop en Windows para compatibilidad con operaciones de socket.
+    # En Python 3.12+ el ProactorEventLoop mejoró, pero SelectorEventLoop sigue siendo más estable.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
@@ -38,45 +37,12 @@ class Main:
     def __init__(self, config: Config):
         self.config = config
 
-        # --- BRUTE FORCE: LOAD CONFIG.TOML FROM APPDATA ---
-        try:
-            appdata = os.environ.get("APPDATA")
-            manual_config_path = os.path.join(appdata, "streamrip", "config.toml")
+        # Leer rutas directamente desde el objeto Config (ya cargado desde config.toml)
+        target_folder = config.session.downloads.folder or os.path.expanduser("~/StreamripDownloads")
+        db_path = config.session.database.downloads_path or DEFAULT_DOWNLOADS_DB_PATH
+        failed_db_path = config.session.database.failed_downloads_path or DEFAULT_FAILED_DOWNLOADS_DB_PATH
 
-            # Default values in case reading fails
-            target_folder = config.session.downloads.folder
-            db_path = os.path.join(target_folder, "downloads.db")
-            failed_db_path = os.path.join(target_folder, "failed_downloads.db")
-
-            if os.path.exists(manual_config_path):
-                with open(manual_config_path, "rb") as f:
-                    data = tomllib.load(f)
-
-                # 1. Force Download Folder
-                if "downloads" in data and "folder" in data["downloads"]:
-                    target_folder = data["downloads"]["folder"]
-                    self.config.session.downloads.folder = target_folder
-
-                # 2. Force Folder Format
-                if "filepaths" in data:
-                    if "folder_format" in data["filepaths"]:
-                        self.config.session.filepaths.folder_format = data["filepaths"]["folder_format"]
-                    if "track_format" in data["filepaths"]:
-                        self.config.session.filepaths.track_format = data["filepaths"]["track_format"]
-
-                # 3. Read Database Paths
-                if "database" in data:
-                    if "downloads_path" in data["database"]:
-                        db_path = data["database"]["downloads_path"]
-                    if "failed_downloads_path" in data["database"]:
-                        failed_db_path = data["database"]["failed_downloads_path"]
-            else:
-                os.makedirs(target_folder, exist_ok=True)
-
-        except Exception:
-            target_folder = config.session.downloads.folder
-            db_path = os.path.join(target_folder, "downloads.db")
-            failed_db_path = os.path.join(target_folder, "failed_downloads.db")
+        os.makedirs(target_folder, exist_ok=True)
 
         # Initialize Clients
         self.clients: dict[str, Client] = {
@@ -86,18 +52,17 @@ class Main:
             "soundcloud": SoundcloudClient(config),
         }
 
-        # Initialize Database with correct paths
+        # Initialize Database
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         os.makedirs(os.path.dirname(failed_db_path), exist_ok=True)
 
         downloads_db = db.Downloads(db_path)
         failed_downloads_db = db.Failed(failed_db_path)
         self.database = db.Database(downloads_db, failed_downloads_db)
-        # -----------------------------------------------------------
 
         self.queue = asyncio.Queue()
         self.producer_tasks = []
-        self.skipped_items = 0  # count of items skipped due to errors
+        self.skipped_items = 0
 
     async def add(self, url: str):
         # Background streaming for Tidal artists

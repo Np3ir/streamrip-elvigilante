@@ -62,9 +62,12 @@ class DatabaseBase(DatabaseInterface):
 
         :param path: Path to the database file.
         """
-        assert self.structure != {}
-        assert self.name
-        assert path
+        if not self.structure:
+            raise ValueError(f"{type(self).__name__}: 'structure' no puede estar vacío")
+        if not self.name:
+            raise ValueError(f"{type(self).__name__}: 'name' no puede estar vacío")
+        if not path:
+            raise ValueError("La ruta de la base de datos no puede estar vacía")
 
         self.path = path
 
@@ -95,9 +98,9 @@ class DatabaseBase(DatabaseInterface):
         :rtype: bool
         """
         allowed_keys = set(self.structure.keys())
-        assert all(
-            key in allowed_keys for key in items.keys()
-        ), f"Invalid key. Valid keys: {allowed_keys}"
+        invalid_keys = set(items.keys()) - allowed_keys
+        if invalid_keys:
+            raise KeyError(f"Claves inválidas: {invalid_keys}. Claves válidas: {allowed_keys}")
 
         items = {k: str(v) for k, v in items.items()}
 
@@ -115,7 +118,11 @@ class DatabaseBase(DatabaseInterface):
         :param items: Column-name + value. Values must be provided for all cols.
         :type items: Tuple[str]
         """
-        assert len(items) == len(self.structure)
+        if len(items) != len(self.structure):
+            raise ValueError(
+                f"Se esperaban {len(self.structure)} columnas ({list(self.structure.keys())}), "
+                f"se recibieron {len(items)}"
+            )
 
         params = ", ".join(self.structure.keys())
         question_marks = ", ".join("?" for _ in items)
