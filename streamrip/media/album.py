@@ -85,11 +85,13 @@ class PendingAlbum(Pending):
             return None
 
         try:
-            meta = AlbumMetadata.from_album_resp(
-                resp,
-                self.client.source,
-                self.config.session.metadata.artist_separator,
-            )
+            sep = self.config.session.metadata.artist_separator
+            if not isinstance(sep, str) or not sep:
+                logger.warning(
+                    "artist_separator config value is missing or invalid (%r); falling back to ', '", sep
+                )
+                sep = ", "
+            meta = AlbumMetadata.from_album_resp(resp, self.client.source, sep)
         except Exception as e:
             logger.error(f"Error building album metadata for id={self.id}: {e}")
             return None

@@ -1,6 +1,11 @@
 import functools
 from typing import Optional, Type, TypeVar
 
+# Default separator used to join multiple artists when no config is available.
+# All public dispatchers (from_resp, from_track_resp, from_album_resp) use this
+# as their default so there is a single source of truth.
+DEFAULT_ARTIST_SEPARATOR: str = ", "
+
 
 def get_album_track_ids(source: str, resp) -> list[str]:
     tracklist = resp["tracks"]

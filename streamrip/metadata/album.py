@@ -9,7 +9,7 @@ from datetime import datetime
 
 from ..filepath_utils import clean_filename, clean_filepath
 from .covers import Covers
-from .util import get_quality_id, safe_get, typed
+from .util import DEFAULT_ARTIST_SEPARATOR, get_quality_id, safe_get, typed
 
 PHON_COPYRIGHT = "℗"
 COPYRIGHT = "©"
@@ -151,10 +151,19 @@ class AlbumMetadata:
         raw_date = resp.get("release_date_original") or resp.get("release_date")
         release_date, year = cls.correct_release_date(raw_date)
         _copyright = resp.get("copyright", "")
-        if artists := resp.get("artists"):
-            albumartist = artist_separator.join(
-                a["name"] for a in artists if a.get("name")
-            ) or typed(safe_get(resp, "artist", "name"), str)
+        raw_artists = resp.get("artists")
+        if isinstance(raw_artists, list) and raw_artists:
+            names = []
+            for a in raw_artists:
+                if not isinstance(a, dict):
+                    logger.warning("AlbumMetadata.from_qobuz: unexpected artist entry type %s, skipping", type(a))
+                    continue
+                name = a.get("name")
+                if name and isinstance(name, str):
+                    names.append(name)
+                else:
+                    logger.warning("AlbumMetadata.from_qobuz: artist entry missing/invalid 'name': %r, skipping", a)
+            albumartist = artist_separator.join(names) if names else typed(safe_get(resp, "artist", "name"), str)
         else:
             albumartist = typed(safe_get(resp, "artist", "name"), str)
         albumcomposer = typed(safe_get(resp, "composer", "name", default=""), str)
@@ -426,7 +435,7 @@ class AlbumMetadata:
         )
 
     @classmethod
-    def from_album_resp(cls, resp: dict, source: str, artist_separator: str = ", ") -> AlbumMetadata | None:
+    def from_album_resp(cls, resp: dict, source: str, artist_separator: str = DEFAULT_ARTIST_SEPARATOR) -> AlbumMetadata | None:
         if source == "qobuz":
             return cls.from_qobuz(resp, artist_separator)
         if source == "tidal":
@@ -438,7 +447,7 @@ class AlbumMetadata:
         raise Exception("Invalid source")
 
     @classmethod
-    def from_track_resp(cls, resp: dict, source: str, artist_separator: str = ", ") -> AlbumMetadata | None:
+    def from_track_resp(cls, resp: dict, source: str, artist_separator: str = DEFAULT_ARTIST_SEPARATOR) -> AlbumMetadata | None:
         if not source:
             raise Exception("Invalid source: None or empty")
         source = source.strip().lower()

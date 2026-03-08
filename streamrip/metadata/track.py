@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .album import AlbumMetadata
-from .util import safe_get, typed
+from .util import DEFAULT_ARTIST_SEPARATOR, safe_get, typed
 from ..filepath_utils import truncate_filepath_to_max, clean_filename
 
 logger = logging.getLogger("streamrip")
@@ -250,20 +250,19 @@ class TrackMetadata:
     def from_deezer(cls, album: AlbumMetadata, resp: dict, artist_separator: str) -> TrackMetadata | None:
         title = typed(resp.get("title", "Unknown Title"), str)
         artist_obj = resp.get("artist", {})
-        artist = artist_obj.get("name", "Unknown Artist")
-        if "contributors" in resp:
-            contribs = [c["name"] for c in resp["contributors"]]
-            if contribs:
-                artist = artist_separator.join(contribs)
+        # Use contributors list when available (may contain multiple artists);
+        # fall back to the single artist field. artist_separator joins multiple names.
+        contribs = [c["name"] for c in resp.get("contributors", []) if c.get("name")]
+        if contribs:
+            artist = artist_separator.join(contribs)
+        else:
+            artist = artist_obj.get("name", "Unknown Artist")
         tracknumber = typed(resp.get("track_position", 1), int)
         discnumber = typed(resp.get("disk_number", 1), int)
         isrc = typed(resp.get("isrc"), str | None)
         explicit = resp.get("explicit_lyrics", False)
-        composer = None
-        if "contributors" in resp:
-            composers = [c["name"] for c in resp["contributors"] if c.get("role") == "Composer"]
-            if composers:
-                composer = ", ".join(composers)
+        composers = [c["name"] for c in resp.get("contributors", []) if c.get("role") == "Composer" and c.get("name")]
+        composer = ", ".join(composers) if composers else None
         track_id = str(resp.get("id", ""))
         quality = 2
         bit_depth = 16
@@ -293,7 +292,7 @@ class TrackMetadata:
         raise NotImplementedError("SoundCloud track support not yet implemented")
 
     @classmethod
-    def from_resp(cls, album_or_source, source_or_resp, maybe_resp=None, artist_separator: str = ", ") -> TrackMetadata | None:
+    def from_resp(cls, album_or_source, source_or_resp, maybe_resp=None, artist_separator: str = DEFAULT_ARTIST_SEPARATOR) -> TrackMetadata | None:
         if maybe_resp is not None:
             album = album_or_source
             source = source_or_resp

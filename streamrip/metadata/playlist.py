@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from .album import AlbumMetadata
 from .track import TrackMetadata
-from .util import typed
+from .util import DEFAULT_ARTIST_SEPARATOR, typed
 
 NON_STREAMABLE = "_non_streamable"
 ORIGINAL_DOWNLOAD = "_original_download"
@@ -53,9 +53,9 @@ class PlaylistMetadata:
 
         for i, track in enumerate(resp["tracks"]["items"]):
             meta = TrackMetadata.from_qobuz(
-                AlbumMetadata.from_qobuz(track["album"], ", "),
+                AlbumMetadata.from_qobuz(track["album"], DEFAULT_ARTIST_SEPARATOR),
                 track,
-                ", ",
+                DEFAULT_ARTIST_SEPARATOR,
             )
             if meta is None:
                 logger.error(f"Track {i+1} in playlist {name} not available for stream")
