@@ -75,7 +75,14 @@ class TestGlobalDownloadSemaphore:
         cfg = make_downloads_config(concurrency=False)
         result = sem_module.global_download_semaphore(cfg)
         assert isinstance(result, asyncio.Semaphore)
-        assert result._value == 1  # disabled concurrency must use a single-slot semaphore
+        # Verify single-slot behavior without relying on the private _value attribute:
+        # the semaphore starts unlocked (1 slot free), and is locked after acquiring it.
+        async def _check():
+            assert not result.locked(), "Single-slot semaphore should start unlocked"
+            await result.acquire()
+            assert result.locked(), "After acquiring the one slot, semaphore must be locked"
+            result.release()
+        asyncio.run(_check())
 
     def test_returns_unlimited_when_max_connections_negative(self):
         cfg = make_downloads_config(concurrency=True, max_connections=-1)

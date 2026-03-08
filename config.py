@@ -211,9 +211,21 @@ class ConfigData:
             dl_data["retry_delay"] = 2.0
         if "max_wait" not in dl_data:
             dl_data["max_wait"] = 60.0
-        # Ensure max_retries is non-negative; negative values silently skip downloads
-        if int(dl_data["max_retries"]) < 0:
-            logger.warning("max_retries cannot be negative (%d); resetting to 0.", dl_data["max_retries"])
+        # Ensure max_retries is non-negative; negative values silently skip downloads.
+        # Guard against non-numeric / malformed values from bad TOML input.
+        try:
+            retries_val = int(dl_data["max_retries"])
+            if retries_val < 0:
+                logger.warning(
+                    "max_retries cannot be negative (%d); resetting to 0.",
+                    retries_val,
+                )
+                dl_data["max_retries"] = 0
+        except (TypeError, ValueError):
+            logger.warning(
+                "max_retries has an invalid value (%r); resetting to 0.",
+                dl_data.get("max_retries"),
+            )
             dl_data["max_retries"] = 0
 
         downloads = DownloadsConfig(**dl_data)  # type: ignore
