@@ -380,6 +380,44 @@ class TidalClient(Client):
             except Exception as e:
                 logger.error(f"Refresh failed: {e}"); raise e
 
+    async def get_lyrics(self, track_id: str) -> str | None:
+        """Fetch timed lyrics and return them in LRC format (Tidal /v1/tracks/{id}/lyrics)."""
+        try:
+            resp = await self._api_request(f"tracks/{track_id}/lyrics", base=API_BASE)
+        except Exception as e:
+            logger.debug("Could not fetch Tidal lyrics for %s: %s", track_id, e)
+            return None
+
+        subtitles_json = resp.get("subtitles")
+        if subtitles_json:
+            return self._subtitles_to_lrc(subtitles_json)
+
+        plain = resp.get("lyrics", "")
+        return plain.strip() or None
+
+    @staticmethod
+    def _subtitles_to_lrc(subtitles_json: str) -> str:
+        """Convert Tidal subtitle JSON to LRC format using pure integer arithmetic."""
+        import json as _json
+        try:
+            lines = _json.loads(subtitles_json)
+        except Exception:
+            return subtitles_json
+
+        lrc_lines = []
+        for line in lines:
+            try:
+                start_ms = int(line.get("startTimeMs", 0))
+            except (TypeError, ValueError):
+                start_ms = 0
+            words = line.get("words", "")
+            minutes = start_ms // 60000
+            remaining_ms = start_ms % 60000
+            seconds = remaining_ms // 1000
+            centiseconds = (remaining_ms % 1000) // 10
+            lrc_lines.append(f"[{minutes:02d}:{seconds:02d}.{centiseconds:02d}]{words}")
+        return "\n".join(lrc_lines)
+
     async def _api_post(self, url, data, auth: aiohttp.BasicAuth | None = None) -> dict:
         async with self.semaphore:
             async with self.session.post(url, data=data, auth=auth) as resp: return await resp.json()

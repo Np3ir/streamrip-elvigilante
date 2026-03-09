@@ -29,7 +29,7 @@ from ..metadata import (
 from ..utils.ssl_utils import get_aiohttp_connector_kwargs
 from .artwork import download_artwork
 from .media import Media, Pending
-from .track import Track
+from .track import Track, _fetch_lrc
 
 logger = logging.getLogger("streamrip")
 
@@ -181,14 +181,16 @@ class PendingPlaylistTrack(Pending):
             self.db.set_failed(self.client.source, "track", self.id)
             return None
 
+        lrc_content = await _fetch_lrc(self.client, self.id, self.config)
         return Track(
             meta,
             downloadable,
             self.config,
-            track_folder, 
+            track_folder,
             embedded_cover_path,
             self.db,
-            from_playlist=True
+            from_playlist=True,
+            lrc_content=lrc_content,
         )
 
     async def _download_cover(self, covers: Covers, folder: str) -> str | None:

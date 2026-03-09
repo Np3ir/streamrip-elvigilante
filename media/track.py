@@ -22,6 +22,20 @@ from .semaphore import global_download_semaphore
 
 logger = logging.getLogger("streamrip")
 
+
+async def _fetch_lrc(client: Client, track_id: str, config: Config) -> str | None:
+    """Shared helper: fetch LRC lyrics if enabled and client supports it."""
+    if not config.session.lyrics.save_lrc:
+        return None
+    if not hasattr(client, "get_lyrics"):
+        return None
+    try:
+        return await client.get_lyrics(track_id)  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.debug("Could not fetch lyrics for track %s: %s", track_id, e)
+        return None
+
+
 @dataclass(slots=True)
 class Track(Media):
     meta: TrackMetadata
@@ -33,6 +47,7 @@ class Track(Media):
     download_path: str = ""
     is_single: bool = False
     from_playlist: bool = False
+    lrc_content: str | None = None
 
     async def rip(self):
         await self.preprocess()
@@ -109,6 +124,15 @@ class Track(Media):
         if self.is_single: remove_title(self.meta.title)
         await tag_file(self.download_path, self.meta, self.cover_path)
         if self.config.session.conversion.enabled: await self._convert()
+        # Save .lrc sidecar file when lyrics were fetched
+        if self.lrc_content:
+            lrc_path = os.path.splitext(self.download_path)[0] + ".lrc"
+            try:
+                with open(lrc_path, "w", encoding="utf-8") as lrc_file:
+                    lrc_file.write(self.lrc_content)
+                logger.debug("Saved LRC: %s", lrc_path)
+            except OSError as e:
+                logger.warning("Could not save LRC file %s: %s", lrc_path, e)
         self.db.set_downloaded(self.meta.info.id)
         console.print(f"[green]Downloaded[/]: {os.path.basename(self.download_path)}")
 
@@ -194,7 +218,8 @@ class PendingTrack(Pending):
             else:
                 logger.warning(f"[!] Missing file: {os.path.basename(file_path)}")
 
-        return Track(meta, downloadable, self.config, track_folder, self.cover_path, self.db)
+        lrc_content = await _fetch_lrc(self.client, self.id, self.config)
+        return Track(meta, downloadable, self.config, track_folder, self.cover_path, self.db, lrc_content=lrc_content)
 
 @dataclass(slots=True)
 class PendingSingle(Pending):
@@ -242,7 +267,8 @@ class PendingSingle(Pending):
             if self.db.downloaded(self.id): logger.warning(f"[!] Re-downloading: {os.path.basename(file_path)}")
             os.makedirs(folder, exist_ok=True)
             embedded_cover_path = await self._download_cover(album.covers, folder)
-            return Track(meta, downloadable, self.config, folder, embedded_cover_path, self.db, is_single=True)
+            lrc_content = await _fetch_lrc(self.client, self.id, self.config)
+            return Track(meta, downloadable, self.config, folder, embedded_cover_path, self.db, is_single=True, lrc_content=lrc_content)
 
     def _format_folder(self, meta: AlbumMetadata) -> str:
         c = self.config.session

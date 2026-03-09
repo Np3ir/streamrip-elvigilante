@@ -113,6 +113,11 @@ class MetadataConfig:
 
 
 @dataclass(slots=True)
+class LyricsConfig:
+    save_lrc: bool = False
+
+
+@dataclass(slots=True)
 class FilepathsConfig:
     add_singles_to_folder: bool
     folder_format: str
@@ -185,6 +190,7 @@ class ConfigData:
     filepaths: FilepathsConfig
     artwork: ArtworkConfig
     metadata: MetadataConfig
+    lyrics: LyricsConfig
     qobuz_filters: QobuzDiscographyFilterConfig
 
     cli: CliConfig
@@ -244,6 +250,17 @@ class ConfigData:
         artwork = ArtworkConfig(**toml["artwork"])  # type: ignore
         filepaths = FilepathsConfig(**toml["filepaths"])  # type: ignore
         metadata = MetadataConfig(**toml["metadata"])  # type: ignore
+
+        # Handle missing [lyrics] section gracefully (existing configs without it)
+        lyrics_raw = toml.get("lyrics")
+        if lyrics_raw is None:
+            lyrics = LyricsConfig()
+        else:
+            lyrics_data: dict = dict(lyrics_raw)  # type: ignore
+            if "save_lrc" not in lyrics_data:
+                lyrics_data["save_lrc"] = False
+            lyrics = LyricsConfig(**lyrics_data)
+
         qobuz_filters = QobuzDiscographyFilterConfig(**toml["qobuz_filters"])  # type: ignore
         cli = CliConfig(**toml["cli"])  # type: ignore
         database = DatabaseConfig(**toml["database"])  # type: ignore
@@ -262,6 +279,7 @@ class ConfigData:
             artwork=artwork,
             filepaths=filepaths,
             metadata=metadata,
+            lyrics=lyrics,
             qobuz_filters=qobuz_filters,
             cli=cli,
             database=database,
@@ -292,6 +310,8 @@ class ConfigData:
         update_toml_section_from_config(self.toml["artwork"], self.artwork)
         update_toml_section_from_config(self.toml["filepaths"], self.filepaths)
         update_toml_section_from_config(self.toml["metadata"], self.metadata)
+        if "lyrics" in self.toml:
+            update_toml_section_from_config(self.toml["lyrics"], self.lyrics)
         update_toml_section_from_config(self.toml["qobuz_filters"], self.qobuz_filters)
         update_toml_section_from_config(self.toml["cli"], self.cli)
         update_toml_section_from_config(self.toml["database"], self.database)
