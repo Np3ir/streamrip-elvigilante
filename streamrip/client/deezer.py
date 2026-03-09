@@ -217,6 +217,55 @@ class DeezerClient(Client):
         logger.debug("dz track info: %s", track_info)
         return DeezerDownloadable(self.session, dl_info)
 
+    async def get_lyrics(self, track_id: str) -> str | None:
+        """Fetch synced lyrics for a track and return them in LRC format.
+
+        Uses the Deezer GW API (``gw.get_track_lyrics``).  If ``LYRICS_SYNC_JSON``
+        is present the timed data is converted to LRC format.  Plain text
+        (``LYRICS_TEXT``) is returned as a fallback.  Returns ``None`` if no
+        lyrics are available or the request fails.
+        """
+        try:
+            result = await asyncio.to_thread(
+                self.client.gw.get_track_lyrics, track_id
+            )
+        except Exception as e:
+            logger.debug("Could not fetch Deezer lyrics for %s: %s", track_id, e)
+            return None
+
+        sync_json = result.get("LYRICS_SYNC_JSON")
+        if sync_json:
+            lrc = self._sync_to_lrc(sync_json)
+            if lrc:
+                return lrc
+
+        # Fall back to plain text
+        plain = result.get("LYRICS_TEXT", "")
+        return plain.strip() or None
+
+    @staticmethod
+    def _sync_to_lrc(sync_lines: list) -> str:
+        """Convert Deezer's ``LYRICS_SYNC_JSON`` list to LRC format.
+
+        Each entry is a dict with ``lrc_timestamp`` (e.g. ``"[00:05.53]"``)
+        and ``line`` (lyric text).
+
+        Example input::
+
+            [{"lrc_timestamp": "[00:05.53]", "line": "Verse one"}, ...]
+
+        Example output::
+
+            [00:05.53]Verse one
+        """
+        lrc_lines = []
+        for entry in sync_lines:
+            timestamp = entry.get("lrc_timestamp", "")
+            text = entry.get("line", "")
+            if timestamp:
+                lrc_lines.append(f"{timestamp}{text}")
+        return "\n".join(lrc_lines)
+
     def _get_encrypted_file_url(
         self,
         meta_id: str,
