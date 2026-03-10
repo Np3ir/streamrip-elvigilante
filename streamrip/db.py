@@ -200,3 +200,6 @@ class Database:
 
     def set_failed(self, source: str, media_type: str, id: str):
         self.failed.add((source, media_type, id))
+
+    def previously_failed(self, item_id: str) -> bool:
+        return self.failed.contains(id=item_id)

@@ -164,6 +164,9 @@ class PendingPlaylistTrack(Pending):
             if file_exists:
                 console.print(f"[dim]   ↪ Skipped (Exists): {meta.artist} - {meta.title}[/dim]")
                 return None
+            elif self.db.previously_failed(self.id):
+                console.print(f"[dim]   ↪ Skipped (Previously failed): {meta.artist} - {meta.title}[/dim]")
+                return None
             else:
                 console.print(f"[yellow]   ! File missing in DB, re-downloading: {meta.title}[/yellow]")
         elif file_exists:
