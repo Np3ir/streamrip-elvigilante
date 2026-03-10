@@ -300,8 +300,16 @@ class AlbumMetadata:
         tracktotal = resp.get("nb_tracks", 1)
         disctotal = 1
         explicit = resp.get("explicit_lyrics", False)
-        # Use contributors to build a multi-artist albumartist when available
-        contributors = resp.get("contributors", {}).get("data", [])
+        # Use contributors to build a multi-artist albumartist when available.
+        # Deezer sometimes returns contributors as {"data": [...]} and sometimes
+        # as a flat list — handle both.
+        contributors_raw = resp.get("contributors", {})
+        if isinstance(contributors_raw, list):
+            contributors = contributors_raw
+        elif isinstance(contributors_raw, dict):
+            contributors = contributors_raw.get("data", [])
+        else:
+            contributors = []
         main_artists = [
             c["name"] for c in contributors
             if isinstance(c, dict) and isinstance(c.get("name"), str) and c.get("role") == "Main"

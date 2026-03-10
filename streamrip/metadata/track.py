@@ -356,7 +356,11 @@ class TrackMetadata:
         artist_obj = resp.get("artist", {})
         # Separate contributors by role, sort each group alphabetically.
         # Deezer uses role="Main" for primary artists, role="Featured" for features.
-        all_contribs = [c for c in resp.get("contributors", []) if isinstance(c.get("name"), str) and c["name"]]
+        # contributors can be a flat list or {"data": [...]} depending on endpoint.
+        _contribs_raw = resp.get("contributors", [])
+        if isinstance(_contribs_raw, dict):
+            _contribs_raw = _contribs_raw.get("data", [])
+        all_contribs = [c for c in _contribs_raw if isinstance(c, dict) and isinstance(c.get("name"), str) and c["name"]]
         dz_main = sorted([c["name"] for c in all_contribs if c.get("role") == "Main"])
         dz_feat = sorted([c["name"] for c in all_contribs if c.get("role") == "Featured"])
         if dz_main or dz_feat:
