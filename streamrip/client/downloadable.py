@@ -45,13 +45,13 @@ async def fast_async_download(path, url, headers, callback, session: aiohttp.Cli
     
     async def _do_download(client_session: aiohttp.ClientSession):
         req_headers = headers if headers else None
-        # Use sock_connect/sock_read instead of total so large FLAC files don't
-        # spuriously timeout. total=60 fires even when data is flowing normally.
+        # No total/read timeout — downloads take as long as needed.
+        # sock_connect=30 still guards against hanging on a dead server.
         async with client_session.get(
             url,
             headers=req_headers,
             allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60),
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=30),
         ) as resp:
             resp.raise_for_status()
             try:
@@ -159,7 +159,11 @@ class DeezerDownloadable(Downloadable):
 
     async def _download(self, path: str, callback):
         # with requests.Session().get(self.url, allow_redirects=True) as resp:
-        async with self.session.get(self.url, allow_redirects=True) as resp:
+        async with self.session.get(
+            self.url,
+            allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=30),
+        ) as resp:
             resp.raise_for_status()
             self._size = int(resp.headers.get("Content-Length", 0))
             if self._size < 20000 and not self.url.endswith(".jpg"):

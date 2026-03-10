@@ -120,6 +120,15 @@ class DeezerClient(Client):
         )
         album_metadata["tracks"] = album_tracks["data"]
         album_metadata["track_total"] = len(album_tracks["data"])
+        # Prefer physical release date (matches what Deezer's site shows)
+        # over the digital release date returned by the public API.
+        try:
+            gw_data = await asyncio.to_thread(self.client.gw.get_album, item_id)
+            physical = gw_data.get("PHYSICAL_RELEASE_DATE")
+            if physical:
+                album_metadata["release_date"] = physical
+        except Exception:
+            pass
         return album_metadata
 
     async def get_playlist(self, item_id: str) -> dict:

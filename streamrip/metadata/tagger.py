@@ -19,9 +19,9 @@ logger = logging.getLogger("streamrip")
 FLAC_MAX_BLOCKSIZE = 16777215  # 16.7 MB
 
 MP4_KEYS = (
-    "\xa9nam", "\xa9ART", "\xa9alb", r"aART", "\xa9day", "\xa9day", "\xa9cmt",
+    "\xa9nam", "\xa9ART", "\xa9alb", r"aART", "\xa9wrt", None, "\xa9cmt",
     "desc", "purd", "\xa9grp", "\xa9gen", "\xa9lyr", "\xa9too", "cprt",
-    "cpil", "trkn", "disk", None, None, None, "----:com.apple.iTunes:ISRC",
+    "cpil", "trkn", "disk", None, None, "\xa9day", "----:com.apple.iTunes:ISRC",
 )
 
 MP3_KEYS = (
@@ -38,6 +38,7 @@ METADATA_TYPES = (
 )
 
 FLAC_KEY = {v: v.upper() for v in METADATA_TYPES}
+FLAC_KEY["year"] = None  # DATE (YYYY-MM-DD) already encodes the year
 MP4_KEY = dict(zip(METADATA_TYPES, MP4_KEYS))
 MP3_KEY = dict(zip(METADATA_TYPES, MP3_KEYS))
 
@@ -64,6 +65,8 @@ class Container(Enum):
     def _tag_flac(self, meta: TrackMetadata) -> list[tuple]:
         out = []
         for k, v in FLAC_KEY.items():
+            if v is None:
+                continue
             tag = self._attr_from_meta(meta, k)
             if tag:
                 if k in {"tracknumber", "discnumber", "tracktotal", "disctotal"}:
