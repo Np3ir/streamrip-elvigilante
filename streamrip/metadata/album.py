@@ -292,7 +292,7 @@ class AlbumMetadata:
         )
 
     @classmethod
-    def from_deezer(cls, resp: dict) -> AlbumMetadata:
+    def from_deezer(cls, resp: dict, artist_separator: str = DEFAULT_ARTIST_SEPARATOR) -> AlbumMetadata:
         album = resp.get("title", "Unknown Album")
         item_id = str(resp.get("id"))
         raw_date = resp.get("release_date")
@@ -300,8 +300,17 @@ class AlbumMetadata:
         tracktotal = resp.get("nb_tracks", 1)
         disctotal = 1
         explicit = resp.get("explicit_lyrics", False)
-        artist_obj = resp.get("artist", {})
-        albumartist = artist_obj.get("name", "Unknown Artist")
+        # Use contributors to build a multi-artist albumartist when available
+        contributors = resp.get("contributors", {}).get("data", [])
+        main_artists = [
+            c["name"] for c in contributors
+            if isinstance(c, dict) and isinstance(c.get("name"), str) and c.get("role") == "Main"
+        ]
+        if main_artists:
+            albumartist = artist_separator.join(main_artists)
+        else:
+            artist_obj = resp.get("artist", {})
+            albumartist = artist_obj.get("name", "Unknown Artist") if isinstance(artist_obj, dict) else "Unknown Artist"
         genres_data = resp.get("genres", {}).get("data", [])
         genres = [g["name"] for g in genres_data]
         label = resp.get("label")
@@ -454,7 +463,7 @@ class AlbumMetadata:
         if source == "soundcloud":
             return cls.from_soundcloud(resp)
         if source == "deezer":
-            return cls.from_deezer(resp)
+            return cls.from_deezer(resp, artist_separator)
         raise Exception("Invalid source")
 
     @classmethod
@@ -470,10 +479,10 @@ class AlbumMetadata:
             return cls.from_soundcloud(resp)
         if source == "deezer":
             if "tracks" not in resp["album"]:
-                return cls.from_incomplete_deezer_track_resp(resp)
-            return cls.from_deezer(resp["album"])
+                return cls.from_incomplete_deezer_track_resp(resp, artist_separator)
+            return cls.from_deezer(resp["album"], artist_separator)
         raise Exception(f"Invalid source: '{source}'")
 
     @classmethod
-    def from_incomplete_deezer_track_resp(cls, resp: dict) -> AlbumMetadata:
-        return cls.from_deezer(resp["album"])
+    def from_incomplete_deezer_track_resp(cls, resp: dict, artist_separator: str = DEFAULT_ARTIST_SEPARATOR) -> AlbumMetadata:
+        return cls.from_deezer(resp["album"], artist_separator)

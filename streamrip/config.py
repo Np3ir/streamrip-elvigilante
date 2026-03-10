@@ -307,8 +307,9 @@ class ConfigData:
         update_toml_section_from_config(self.toml["artwork"], self.artwork)
         update_toml_section_from_config(self.toml["filepaths"], self.filepaths)
         update_toml_section_from_config(self.toml["metadata"], self.metadata)
-        if "lyrics" in self.toml:
-            update_toml_section_from_config(self.toml["lyrics"], self.lyrics)
+        if "lyrics" not in self.toml:
+            self.toml["lyrics"] = {}
+        update_toml_section_from_config(self.toml["lyrics"], self.lyrics)
         update_toml_section_from_config(self.toml["qobuz_filters"], self.qobuz_filters)
         update_toml_section_from_config(self.toml["cli"], self.cli)
         update_toml_section_from_config(self.toml["database"], self.database)
