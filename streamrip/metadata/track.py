@@ -286,11 +286,9 @@ class TrackMetadata:
         artists_raw = resp.get("artists", [])
         main_artists = sorted(
             [a["name"] for a in artists_raw if a.get("type") == "MAIN" or not a.get("type")],
-            key=lambda x: x.casefold(),
         )
         featured_artists = sorted(
             [a["name"] for a in artists_raw if a.get("type") == "FEATURED"],
-            key=lambda x: x.casefold(),
         )
         artist = artist_separator.join(main_artists + featured_artists) or "Unknown Artist"
         composer_raw = resp.get("composer")
