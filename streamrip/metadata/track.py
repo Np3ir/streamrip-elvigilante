@@ -266,7 +266,12 @@ class TrackMetadata:
         isrc = typed(resp.get("isrc", ""), str | None)
         version = (resp.get("version") or "").strip() or None
         if version and version.lower() not in title.lower():
-            title = f"{title} ({version})"
+            # Heuristic: musician credit lists like "A, B, C & D" have 2+ commas.
+            # Skip appending those to the title; they are not real version tags.
+            if version.count(",") < 2:
+                title = f"{title} ({version})"
+            else:
+                version = None  # Treat as non-version; don't pollute title
 
         # Fix: Handle lyrics safely (sometimes it is a string, sometimes a dict)
         lyrics_raw = resp.get("lyrics")
