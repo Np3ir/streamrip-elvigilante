@@ -193,11 +193,13 @@ class TrackMetadata:
                     if part and part not in main_artists and part not in featured_artists:
                         featured_artists.append(part)
 
+        # Sort each group alphabetically — same behaviour as Tidal
+        main_artists = sorted(main_artists)
+
         title_and_version = f"{resp.get('title', '')} {resp.get('version', '')}".lower()
-        filtered_featured_artists = []
-        for artist in featured_artists:
-            if artist.lower() not in title_and_version:
-                filtered_featured_artists.append(artist)
+        filtered_featured_artists = sorted([
+            a for a in featured_artists if a.lower() not in title_and_version
+        ])
 
         all_artists_raw = main_artists + filtered_featured_artists
         seen = set()
@@ -277,6 +279,8 @@ class TrackMetadata:
             discnumber=discnumber,
             composer=composer,
             isrc=isrc,
+            main_artists=artist_separator.join(main_artists) or None,
+            featured_artists=artist_separator.join(filtered_featured_artists) or None,
         )
 
     @classmethod
@@ -350,17 +354,18 @@ class TrackMetadata:
         if version and version.lower() not in title.lower():
             title = f"{title} ({version})"
         artist_obj = resp.get("artist", {})
-        # Use contributors list when available (may contain multiple artists);
-        # fall back to the single artist field. artist_separator joins multiple names.
-        contribs = [
-            c["name"]
-            for c in resp.get("contributors", [])
-            if isinstance(c.get("name"), str) and c["name"]
-        ]
-        if contribs:
-            artist = artist_separator.join(contribs)
+        # Separate contributors by role, sort each group alphabetically.
+        # Deezer uses role="Main" for primary artists, role="Featured" for features.
+        all_contribs = [c for c in resp.get("contributors", []) if isinstance(c.get("name"), str) and c["name"]]
+        dz_main = sorted([c["name"] for c in all_contribs if c.get("role") == "Main"])
+        dz_feat = sorted([c["name"] for c in all_contribs if c.get("role") == "Featured"])
+        if dz_main or dz_feat:
+            artist = artist_separator.join(dz_main + dz_feat)
         else:
-            artist = artist_obj.get("name", "Unknown Artist")
+            # Fallback: any contributor, or single artist field
+            any_contribs = [c["name"] for c in all_contribs]
+            artist = artist_separator.join(any_contribs) if any_contribs else artist_obj.get("name", "Unknown Artist")
+            dz_main = [artist] if artist else []
         tracknumber = typed(resp.get("track_position", 1), int)
         discnumber = typed(resp.get("disk_number", 1), int)
         isrc = typed(resp.get("isrc"), str | None)
@@ -394,6 +399,8 @@ class TrackMetadata:
             isrc=isrc,
             lyrics="",
             version=version,
+            main_artists=artist_separator.join(dz_main) or None,
+            featured_artists=artist_separator.join(dz_feat) or None,
         )
 
     @classmethod
