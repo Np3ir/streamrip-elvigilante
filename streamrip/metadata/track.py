@@ -193,44 +193,21 @@ class TrackMetadata:
                     if part and part not in main_artists and part not in featured_artists:
                         featured_artists.append(part)
 
-        # Sort each group alphabetically — same behaviour as Tidal
-        main_artists = sorted(main_artists)
-
-        title_and_version = f"{resp.get('title', '')} {resp.get('version', '')}".lower()
-        filtered_featured_artists = sorted([
-            a for a in featured_artists if a.lower() not in title_and_version
-        ])
-
-        all_artists_raw = main_artists + filtered_featured_artists
-        seen = set()
-        all_artists = []
-        for a in all_artists_raw:
-            norm = a.lower().strip()
-            if norm not in seen:
-                all_artists.append(a.strip())
-                seen.add(norm)
+        # Sort each group alphabetically — same behaviour as Tidal / Deezer
+        main_artists = sorted(set(main_artists))
+        featured_artists = sorted(
+            a for a in set(featured_artists)
+            if a.lower() not in {m.lower() for m in main_artists}
+        )
+        all_artists = main_artists + featured_artists
         artist_string = artist_separator.join(all_artists) if all_artists else "Unknown"
 
         title = typed(resp["title"].strip(), str)
-        for artist in all_artists:
-            pattern = rf"\s*[\(\[]?(with|feat\.?|ft\.?|featuring)\s+{re.escape(artist)}[\)\]]?"
-            title = re.sub(pattern, "", title, flags=re.IGNORECASE).strip()
-        title = re.sub(r"\s{2,}", " ", title).strip()
 
         isrc = typed(resp["isrc"], str)
         streamable = typed(resp.get("streamable", False), bool)
         if not streamable:
             return None
-
-        for artist in all_artists:
-            variants = [
-                f"(with {artist})", f"(feat. {artist})", f"(featuring {artist})",
-                f"[with {artist}]", f"[feat. {artist}]", f"[featuring {artist}]"
-            ]
-            for v in variants:
-                if v.lower() in title.lower():
-                    title = re.sub(re.escape(v), "", title, flags=re.IGNORECASE).strip()
-                    title = re.sub(r"\s{2,}", " ", title).strip()
 
         version = typed(resp.get("version"), str | None)
         work = typed(resp.get("work"), str | None)
@@ -280,7 +257,7 @@ class TrackMetadata:
             composer=composer,
             isrc=isrc,
             main_artists=artist_separator.join(main_artists) or None,
-            featured_artists=artist_separator.join(filtered_featured_artists) or None,
+            featured_artists=artist_separator.join(featured_artists) or None,
         )
 
     @classmethod
@@ -367,7 +344,7 @@ class TrackMetadata:
             artist = artist_separator.join(dz_main + dz_feat)
         else:
             # Fallback: any contributor, or single artist field
-            any_contribs = [c["name"] for c in all_contribs]
+            any_contribs = sorted([c["name"] for c in all_contribs])
             artist = artist_separator.join(any_contribs) if any_contribs else artist_obj.get("name", "Unknown Artist")
             dz_main = [artist] if artist else []
         tracknumber = typed(resp.get("track_position", 1), int)
@@ -376,7 +353,7 @@ class TrackMetadata:
         explicit = resp.get("explicit_lyrics", False)
         composers = [
             c["name"]
-            for c in resp.get("contributors", [])
+            for c in all_contribs
             if c.get("role") == "Composer" and isinstance(c.get("name"), str) and c["name"]
         ]
         composer = ", ".join(composers) if composers else None
