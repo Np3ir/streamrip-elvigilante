@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 import aiohttp
@@ -23,6 +24,12 @@ async def fetch_lrc(client: Client, track_id: str, config: Config) -> str | None
         return None
     try:
         return await client.get_lyrics(track_id)  # type: ignore[attr-defined]
-    except (aiohttp.ClientError, asyncio.TimeoutError, NonStreamableError) as e:
+    except (
+        aiohttp.ClientError,
+        aiohttp.ClientResponseError,
+        asyncio.TimeoutError,
+        json.JSONDecodeError,
+        NonStreamableError,
+    ) as e:
         logger.debug("Could not fetch lyrics for track %s: %s", track_id, e)
         return None
