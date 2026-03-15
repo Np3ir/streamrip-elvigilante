@@ -30,7 +30,8 @@ from ..metadata import (
 from ..utils.ssl_utils import get_aiohttp_connector_kwargs
 from .artwork import download_artwork
 from .media import Media, Pending
-from .track import Track, _fetch_lrc
+from .lyrics import fetch_lrc
+from .track import Track
 
 logger = logging.getLogger("streamrip")
 
@@ -185,7 +186,7 @@ class PendingPlaylistTrack(Pending):
             self.db.set_failed(self.client.source, "track", self.id)
             return None
 
-        lrc_content = await _fetch_lrc(self.client, self.id, self.config)
+        lrc_content = await fetch_lrc(self.client, self.id, self.config)
         return Track(
             meta,
             downloadable,

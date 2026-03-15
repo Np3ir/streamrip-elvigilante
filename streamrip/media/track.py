@@ -17,29 +17,11 @@ from ..metadata import AlbumMetadata, Covers, TrackMetadata, tag_file
 from ..progress import add_title, get_progress_callback, remove_title
 from ..console import console
 from .artwork import download_artwork
+from .lyrics import fetch_lrc
 from .media import Media, Pending
 from .semaphore import global_download_semaphore
 
 logger = logging.getLogger("streamrip")
-
-
-async def _fetch_lrc(client: Client, track_id: str, config: Config) -> str | None:
-    """Fetch LRC lyrics from the client if the feature is enabled in config.
-
-    Returns the LRC content as a string, or ``None`` when lyrics are not
-    configured, the client does not support lyrics, or the request fails.
-    Centralises the check so ``PendingTrack``, ``PendingSingle``, and
-    ``PendingPlaylistTrack`` share a single implementation.
-    """
-    if not config.session.lyrics.save_lrc:
-        return None
-    if not hasattr(client, "get_lyrics"):
-        return None
-    try:
-        return await client.get_lyrics(track_id)  # type: ignore[attr-defined]
-    except Exception as e:
-        logger.debug("Could not fetch lyrics for track %s: %s", track_id, e)
-        return None
 
 
 @dataclass(slots=True)
@@ -224,7 +206,7 @@ class PendingTrack(Pending):
             else:
                 logger.warning(f"[!] Missing file: {os.path.basename(file_path)}")
 
-        lrc_content = await _fetch_lrc(self.client, self.id, self.config)
+        lrc_content = await fetch_lrc(self.client, self.id, self.config)
         return Track(meta, downloadable, self.config, track_folder, self.cover_path, self.db, lrc_content=lrc_content)
 
 @dataclass(slots=True)
@@ -274,7 +256,7 @@ class PendingSingle(Pending):
             os.makedirs(folder, exist_ok=True)
             embedded_cover_path = await self._download_cover(album.covers, folder)
 
-            lrc_content = await _fetch_lrc(self.client, self.id, self.config)
+            lrc_content = await fetch_lrc(self.client, self.id, self.config)
             return Track(meta, downloadable, self.config, folder, embedded_cover_path, self.db, is_single=True, lrc_content=lrc_content)
 
     def _format_folder(self, meta: AlbumMetadata) -> str:

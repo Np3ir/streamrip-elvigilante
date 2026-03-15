@@ -1,6 +1,7 @@
 import asyncio
 import binascii
 import hashlib
+import json
 import logging
 
 import aiohttp  # ← ADDED: Import aiohttp
@@ -244,9 +245,15 @@ class DeezerClient(Client):
 
         sync_json = result.get("LYRICS_SYNC_JSON")
         if sync_json:
-            lrc = self._sync_to_lrc(sync_json)
-            if lrc:
-                return lrc
+            if isinstance(sync_json, str):
+                try:
+                    sync_json = json.loads(sync_json)
+                except (json.JSONDecodeError, TypeError):
+                    sync_json = None
+            if isinstance(sync_json, list):
+                lrc = self._sync_to_lrc(sync_json)
+                if lrc:
+                    return lrc
 
         # Fall back to plain text
         plain = result.get("LYRICS_TEXT", "")
