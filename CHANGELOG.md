@@ -6,6 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [2.2.4] — ElVigilante Edition
+
+### Fixed
+
+- **`fetch_lrc` exception scope** (`media/lyrics.py`)
+  — Catch `aiohttp.ClientResponseError` and `json.JSONDecodeError` in addition to the
+  existing `aiohttp.ClientError`, `asyncio.TimeoutError`, and `NonStreamableError`.
+  Only truly unexpected failures now propagate; lyrics retrieval never crashes a download.
+
+- **`DeezerClient.get_lyrics` debug log** (`client/deezer.py`)
+  — When `LYRICS_SYNC_JSON` fails to parse, the debug message now includes a truncated
+  snippet of the raw value (first 80 chars or its type) to make diagnosis easier.
+
+---
+
+## [2.2.3] — ElVigilante Edition
+
+### Added
+
+- **Dedicated lyrics module** (`media/lyrics.py`)
+  — `fetch_lrc` extracted from `media/track.py` into a standalone module so that
+  `PendingTrack`, `PendingSingle`, and `PendingPlaylistTrack` all share a single,
+  tested implementation.
+
+- **Adaptive rate-limit delay for Tidal** (`client/tidal.py`)
+  — A `_rate_limit_delay` float (initially `0.0`) is maintained per client instance.
+  Every HTTP 429 response increments it by `1.0 s` (max `5.0 s`); every successful
+  JSON response decrements it by `0.1 s` (floor `0.0 s`). This delay is applied before
+  the fixed-interval gate on every request, mirroring the strategy used in tiddl and
+  tidmon for a consistent cross-tool behaviour.
+
+- **`Deezer.get_lyrics` — JSON string handling** (`client/deezer.py`)
+  — `LYRICS_SYNC_JSON` fields returned as a JSON string (rather than a pre-parsed list)
+  are now decoded with `json.loads`. A `json.JSONDecodeError` is caught and logged at
+  `DEBUG` level so a malformed field never prevents lyrics from falling through to the
+  plain-text path.
+
+---
+
+## [2.2.2] — ElVigilante Edition
+
+### Changed
+
+- **Tidal rate limiting — replaced token bucket with fixed-interval async gate**
+  (`client/tidal.py`)
+  — `aiolimiter.AsyncLimiter` (token bucket) was removed. An `asyncio.Lock` now
+  serialises all coroutines through a single fixed-interval gate (`60 / rpm` seconds).
+  Per-request jitter (`random.uniform(0, 0.3)`) is added inside the lock so the pattern
+  is unpredictable to the API. This eliminates the burst behaviour that caused 429 errors
+  at the start of large downloads.
+
+- **Configurable `requests_per_minute`** (`client/tidal.py`)
+  — The Tidal client already accepted `requests_per_minute` from `[downloads]`; the
+  default is now a safe `60` rpm enforced through the new lock-based limiter.
+
+---
+
 ## [2.2.1] — ElVigilante Edition
 
 ### Added
