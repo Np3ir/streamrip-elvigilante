@@ -44,7 +44,7 @@ def _get_client_credentials() -> tuple[str, str]:
     env_secret = os.environ.get("TIDAL_CLIENT_SECRET")
     if env_id and env_secret:
         return env_id, env_secret
-    logger.warning(
+    logger.debug(
         "TIDAL_CLIENT_ID / TIDAL_CLIENT_SECRET not set — using bundled default "
         "credentials. These may be revoked at any time. "
         "Set the env vars to use your own Tidal app credentials."
@@ -573,7 +573,7 @@ class TidalClient(Client):
                         if resp.status == 429:
                             self._rate_limit_delay = min(5.0, self._rate_limit_delay + 1.0)
                             wait = int(resp.headers.get("Retry-After", 10)) + random.randint(5, 10)
-                            logger.warning(f"Rate Limit hit. Backing off {wait}s... (adaptive_delay={self._rate_limit_delay:.1f}s)")
+                            logger.debug(f"Rate Limit hit. Backing off {wait}s... (adaptive_delay={self._rate_limit_delay:.1f}s)")
                             await asyncio.sleep(wait)
                             continue
                         if resp.status == 401:
