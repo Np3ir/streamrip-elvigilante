@@ -38,7 +38,7 @@ METADATA_TYPES = (
 )
 
 FLAC_KEY = {v: v.upper() for v in METADATA_TYPES}
-FLAC_KEY["year"] = None  # DATE (YYYY-MM-DD) already encodes the year
+FLAC_KEY["year"] = "YEAR"  # También escribir YEAR=YYYY para compatibilidad con reproductores
 MP4_KEY = dict(zip(METADATA_TYPES, MP4_KEYS))
 MP3_KEY = dict(zip(METADATA_TYPES, MP3_KEYS))
 
